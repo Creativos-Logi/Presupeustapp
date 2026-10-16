@@ -5,6 +5,7 @@ import {
   parseDelimitedText,
   parseExcelWorkbook
 } from '../src/utils/fileParser.js';
+import { mergeExtractedMetrics } from '../src/utils/dataMerger.js';
 
 function runFileParserTests() {
   console.log('🧪 Iniciando pruebas de parsing de archivos CSV y Excel...\n');
@@ -102,6 +103,35 @@ DANTE NOVA,800000,950,842`;
     assert(result.parsedItems[0].effectiveness === 18.5, 'Efectividad correcta (18.5%)');
     assert(result.detectedType === 'BOTH', 'Detecta que contiene tanto costo como efectividad (BOTH)');
     assert(result.parsedItems[1].product === 'CONJUNTOS CK', 'Enriquece TOP MARKET 4 con CONJUNTOS CK del catálogo');
+  }
+
+  // Test 6: Prioridad absoluta de datos subidos sobre datos previamente guardados
+  {
+    const savedPortfolio = [
+      { id: 's1', name: 'DRISTRI PRO 1', currentBudget: 1000000, costPerMessage: 1200, effectiveness: 14.0, currentMessages: 833, trafiker: 'Julio' },
+      { id: 's2', name: 'DANTE NOVA 3', currentBudget: 800000, costPerMessage: 1400, effectiveness: 20.0, currentMessages: 571, trafiker: 'Oscar' }
+    ];
+
+    // Archivo recién subido con datos frescos de hoy
+    const newlyUploadedData = [
+      { name: 'DRISTRI PRO 1', currentBudget: 1500000, costPerMessage: 950, effectiveness: 22.5, currentMessages: 1578, trafiker: 'Oscar' },
+      { name: 'DANTE NOVA 3', effectiveness: 26.0 } // Solo actualiza efectividad
+    ];
+
+    // Fusión con BOTH
+    const mergedBoth = mergeExtractedMetrics(savedPortfolio, newlyUploadedData, 'BOTH');
+    const store1 = mergedBoth.find(it => it.name === 'DRISTRI PRO 1');
+    const store2 = mergedBoth.find(it => it.name === 'DANTE NOVA 3');
+
+    assert(store1.currentBudget === 1500000, 'Presupuesto nuevo ($1,500,000) tiene prioridad sobre el guardado ($1,000,000)');
+    assert(store1.costPerMessage === 950, 'Costo nuevo ($950) tiene prioridad sobre el guardado ($1,200)');
+    assert(store1.effectiveness === 22.5, 'Efectividad nueva (22.5%) tiene prioridad sobre la guardada (14.0%)');
+    assert(store1.currentMessages === 1578, 'Mensajes nuevos (1578) tienen prioridad sobre los guardados (833)');
+    assert(store1.trafiker === 'Oscar', 'Trafiker nuevo (Oscar) tiene prioridad sobre el previo (Julio)');
+
+    assert(store2.effectiveness === 26.0, 'Efectividad nueva (26.0%) actualiza tienda 2');
+    assert(store2.currentBudget === 800000, 'Conserva presupuesto previo de tienda 2 ($800,000) ya que el archivo no trajo presupuesto');
+    assert(store2.costPerMessage === 1400, 'Conserva costo previo de tienda 2 ($1,400) ya que el archivo no trajo costo');
   }
 
   console.log(`\nResultados File Parser: ${passed} pasadas, ${failed} fallidas`);
