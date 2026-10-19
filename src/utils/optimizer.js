@@ -206,8 +206,10 @@ export function optimizeBudget(items, options = {}) {
       ? ((budgetDelta / item.currentBudget) * 100) 
       : 0;
 
-    const projectedMessages = Math.round(newBudget / item.costPerMessage);
-    const projectedEffectiveMessages = Number((projectedMessages * (item.effectiveness / 100)).toFixed(1));
+    const projectedMessages = item.costPerMessage > 0 ? Math.round(newBudget / item.costPerMessage) : 0;
+    const projectedEffectiveMessages = item.costPerMessage > 0
+      ? Number((projectedMessages * (item.effectiveness / 100)).toFixed(1))
+      : 0;
 
     const messagesDelta = projectedMessages - item.currentMessages;
     const effectiveMessagesDelta = projectedEffectiveMessages - item.currentEffectiveMessages;
@@ -280,7 +282,7 @@ export function optimizeBudget(items, options = {}) {
       projectedEffectiveMessages: Number(catNewEff.toFixed(1)),
       deltaEffective: Number(deltaEff.toFixed(1)),
       deltaEffectivePct: Number(deltaEffPct.toFixed(1)),
-      weightedEff: catNewMsgs > 0 ? Number(((catNewEff / catNewMsgs) * 100).toFixed(1)) : 0
+      weightedEff: (catNewMsgs > 0 && !isNaN(catNewEff)) ? Number(((catNewEff / catNewMsgs) * 100).toFixed(1)) : 0
     };
   });
 
@@ -496,7 +498,8 @@ export function planTwoPhaseRedistribution(items, options = {}) {
     maxVariationPct = 50,
     alpha = 1.3,
     beta = 1.0, // Factor de sensibilidad al costo x mensaje (CPR)
-    categoryBudgets = null
+    categoryBudgets = null,
+    manualOverrides = {}
   } = options;
 
   const totalCurrentBudget = items.reduce((acc, it) => acc + (Number(it.currentBudget) || 0), 0);
@@ -520,6 +523,17 @@ export function planTwoPhaseRedistribution(items, options = {}) {
     ? Math.round(rawMondayTarget / effectiveRoundingStep) * effectiveRoundingStep
     : rawMondayTarget;
 
+  // Escalar los bloqueos manuales para el fin de semana proporcionalmente a la reducción
+  const weekendManualOverrides = {};
+  if (manualOverrides && Object.keys(manualOverrides).length > 0) {
+    Object.keys(manualOverrides).forEach(id => {
+      const val = Number(manualOverrides[id]) || 0;
+      weekendManualOverrides[id] = effectiveRoundingStep > 0
+        ? Math.floor((val * (1 - Math.abs(reductionPct) / 100)) / effectiveRoundingStep) * effectiveRoundingStep
+        : Math.round(val * (1 - Math.abs(reductionPct) / 100));
+    });
+  }
+
   // Optimización Fase 1: Fin de semana
   const weekendResult = optimizeBudget(items, {
     targetBudget: weekendTargetBudget,
@@ -528,7 +542,8 @@ export function planTwoPhaseRedistribution(items, options = {}) {
     maxVariationPct,
     alpha,
     beta,
-    categoryBudgets
+    categoryBudgets,
+    manualOverrides: weekendManualOverrides
   });
 
   // Optimización Fase 2: Lunes
@@ -539,7 +554,8 @@ export function planTwoPhaseRedistribution(items, options = {}) {
     maxVariationPct,
     alpha,
     beta,
-    categoryBudgets
+    categoryBudgets,
+    manualOverrides
   });
 
   // Mapas por tienda para combinar fases
@@ -598,7 +614,9 @@ export function planTwoPhaseRedistribution(items, options = {}) {
       reactivationDeltaPct,
       reactivationAction,
       reactivationColor,
-      isBelowThreshold: w.isBelowThreshold
+      isBelowThreshold: w.isBelowThreshold,
+      isManualLocked: m.isManualLocked,
+      manualBudget: m.manualBudget
     };
   });
 
@@ -606,10 +624,34 @@ export function planTwoPhaseRedistribution(items, options = {}) {
   const totalMondayAllocated = combinedItems.reduce((acc, it) => acc + it.mondayBudget, 0);
   const totalReactivationDelta = totalMondayAllocated - totalWeekendAllocated;
 
+  // Resumen por categorías en Re-escalada
+  const categories = Array.from(new Set(items.map(it => it.category || 'General')));
+  const categoryReboundSummaries = categories.map(cat => {
+    const wSummary = weekendResult.categorySummaries?.find(s => s.category === cat);
+    const mSummary = mondayResult.categorySummaries?.find(s => s.category === cat);
+    const catWeekendBudget = wSummary ? wSummary.newBudget : 0;
+    const catMondayBudget = mSummary ? mSummary.newBudget : 0;
+    const reactivationDelta = catMondayBudget - catWeekendBudget;
+    const reactivationDeltaPct = catWeekendBudget > 0 ? Number(((reactivationDelta / catWeekendBudget) * 100).toFixed(1)) : 0;
+
+    return {
+      category: cat,
+      itemCount: mSummary?.itemCount || wSummary?.itemCount || 0,
+      currentBudget: mSummary?.currentBudget || 0,
+      weekendBudget: catWeekendBudget,
+      mondayBudget: catMondayBudget,
+      reactivationDelta,
+      reactivationDeltaPct,
+      weekendSummary: wSummary,
+      mondaySummary: mSummary
+    };
+  });
+
   return {
     combinedItems,
     weekendResult,
     mondayResult,
+    categoryReboundSummaries,
     reboundSummary: {
       activeBase,
       reductionPct,

@@ -38,6 +38,7 @@ export default function App() {
   // Control de categorías
   const [isCategoryMode, setIsCategoryMode] = useState(true);
   const [categoryBudgets, setCategoryBudgets] = useState({});
+  const [lockedCategoryBudgets, setLockedCategoryBudgets] = useState({});
   
   // Filtros dinámicos: Producto, Trafiker, Coordinador, Buscador
   const [selectedProduct, setSelectedProduct] = useState('ALL');
@@ -118,32 +119,84 @@ export default function App() {
     return Array.from(new Set(filteredItems.map(it => it.category || 'General')));
   }, [filteredItems]);
 
-  // Sincronizar presupuestos por categoría iniciales
+  // Sincronizar presupuestos por categoría respetando bloqueos manuales (candados)
   useEffect(() => {
     if (categories.length === 0) return;
     
     const catCurrentTotals = {};
+    const catStoreCounts = {};
     categories.forEach(cat => {
-      catCurrentTotals[cat] = filteredItems
-        .filter(it => (it.category || 'General') === cat)
-        .reduce((sum, it) => sum + (Number(it.currentBudget) || 0), 0);
+      const itemsInCat = filteredItems.filter(it => (it.category || 'General') === cat);
+      catCurrentTotals[cat] = itemsInCat.reduce((sum, it) => sum + (Number(it.currentBudget) || 0), 0);
+      catStoreCounts[cat] = itemsInCat.length;
     });
 
-    const newCatBudgets = {};
-    let allocatedSum = 0;
-    categories.forEach((cat, idx) => {
-      if (idx === categories.length - 1) {
-        newCatBudgets[cat] = Math.max(0, effectiveTargetBudget - allocatedSum);
-      } else {
-        const ratio = activeBaseBudget > 0 ? (catCurrentTotals[cat] / activeBaseBudget) : (1 / categories.length);
-        const amount = Math.round(effectiveTargetBudget * ratio);
-        newCatBudgets[cat] = amount;
-        allocatedSum += amount;
+    // 1. Identificar categorías con presupuesto bloqueado manualmente
+    const validLocked = {};
+    let totalLockedAmount = 0;
+
+    categories.forEach(cat => {
+      if (lockedCategoryBudgets && lockedCategoryBudgets[cat] !== undefined) {
+        const raw = Math.max(0, Number(lockedCategoryBudgets[cat]) || 0);
+        // Redondeo en miles limpios ($1,000 COP)
+        const rounded = Math.floor(raw / 1000) * 1000;
+        validLocked[cat] = rounded;
+        totalLockedAmount += rounded;
       }
     });
 
+    const unlockedCategories = categories.filter(cat => validLocked[cat] === undefined);
+    const newCatBudgets = { ...validLocked };
+
+    // Si todas las categorías están bloqueadas
+    if (unlockedCategories.length === 0) {
+      setCategoryBudgets(newCatBudgets);
+      return;
+    }
+
+    // Saldo libre para repartir entre categorías no bloqueadas
+    const freeBudget = Math.max(0, effectiveTargetBudget - totalLockedAmount);
+
+    // Suma de bases de las desbloqueadas
+    const unlockedCurrentSum = unlockedCategories.reduce((sum, cat) => sum + catCurrentTotals[cat], 0);
+
+    // Pesos para las desbloqueadas
+    const weights = unlockedCategories.map(cat => {
+      if (unlockedCurrentSum > 0) {
+        return catCurrentTotals[cat] / unlockedCurrentSum;
+      }
+      return (catStoreCounts[cat] || 1);
+    });
+    const totalWeight = weights.reduce((sum, w) => sum + w, 0) || 1;
+
+    // Asignación floor en miles limpios ($1,000 COP)
+    let unlockedAllocations = unlockedCategories.map((_, i) => {
+      const rawAlloc = (weights[i] / totalWeight) * freeBudget;
+      return Math.floor(rawAlloc / 1000) * 1000;
+    });
+
+    // Repartir residuo en pasos de $1,000 COP a las categorías de mayor peso
+    let assignedUnlockedSum = unlockedAllocations.reduce((sum, val) => sum + val, 0);
+    let remainder = freeBudget - assignedUnlockedSum;
+
+    const sortedIndices = unlockedCategories
+      .map((cat, idx) => ({ idx, weight: weights[idx] }))
+      .sort((a, b) => b.weight - a.weight);
+
+    let loop = 0;
+    while (remainder >= 1000 && loop < sortedIndices.length * 10) {
+      const targetIdx = sortedIndices[loop % sortedIndices.length].idx;
+      unlockedAllocations[targetIdx] += 1000;
+      remainder -= 1000;
+      loop++;
+    }
+
+    unlockedCategories.forEach((cat, idx) => {
+      newCatBudgets[cat] = unlockedAllocations[idx];
+    });
+
     setCategoryBudgets(newCatBudgets);
-  }, [filteredItems, effectiveTargetBudget, categories.join(',')]);
+  }, [filteredItems, effectiveTargetBudget, categories.join(','), lockedCategoryBudgets]);
 
   // Cálculo de optimización en tiempo real sobre las tiendas filtradas
   const { optimizedItems: rawOptimizedFiltered, summary: filteredSummary, categorySummaries } = useMemo(() => {
@@ -171,9 +224,10 @@ export default function App() {
       maxVariationPct,
       alpha,
       beta,
-      categoryBudgets: isCategoryMode ? categoryBudgets : null
+      categoryBudgets: isCategoryMode ? categoryBudgets : null,
+      manualOverrides
     });
-  }, [isReboundMode, filteredItems, effectiveTargetBudget, reboundReductionPct, reboundMondayBudget, roundingStep, minEffectivenessThreshold, maxVariationPct, alpha, beta, isCategoryMode, categoryBudgets]);
+  }, [isReboundMode, filteredItems, effectiveTargetBudget, reboundReductionPct, reboundMondayBudget, roundingStep, minEffectivenessThreshold, maxVariationPct, alpha, beta, isCategoryMode, categoryBudgets, manualOverrides]);
 
   // Tiendas no filtradas: mantienen su presupuesto actual exactamente igual (0 variación)
   const untouchedItems = useMemo(() => {
@@ -254,8 +308,11 @@ export default function App() {
     setItems(extractedItems.map(enrichItemWithCatalog));
     setTargetBudget(null);
     setPctDelta(0);
+    setManualOverrides({});
+    setLockedCategoryBudgets({});
   };
 
+  // Handlers para bloqueo de presupuestos por tienda individual
   const handleSetManualBudget = (id, amount) => {
     setManualOverrides(prev => ({
       ...prev,
@@ -275,11 +332,30 @@ export default function App() {
     setManualOverrides({});
   };
 
+  // Handlers para bloqueo de presupuestos por categoría
+  const handleSetCategoryBudget = (cat, amount) => {
+    const cleanAmount = Math.max(0, Math.floor((Number(amount) || 0) / 1000) * 1000);
+    setLockedCategoryBudgets(prev => ({ ...prev, [cat]: cleanAmount }));
+  };
+
+  const handleClearCategoryLock = (cat) => {
+    setLockedCategoryBudgets(prev => {
+      const copy = { ...prev };
+      delete copy[cat];
+      return copy;
+    });
+  };
+
+  const handleClearAllCategoryLocks = () => {
+    setLockedCategoryBudgets({});
+  };
+
   const handleReset = () => {
     setItems(getInitialCatalogPortfolio());
     setTargetBudget(null);
     setPctDelta(0);
     setManualOverrides({});
+    setLockedCategoryBudgets({});
     handleResetFilters();
   };
 
@@ -288,6 +364,8 @@ export default function App() {
     setItems(dataset);
     setTargetBudget(null);
     setPctDelta(0);
+    setManualOverrides({});
+    setLockedCategoryBudgets({});
   };
 
   const filterBadgeInfo = useMemo(() => {
@@ -378,7 +456,7 @@ export default function App() {
         </div>
 
         {/* Fila 3: Gestión y Segmentación de Presupuesto por Categorías */}
-        {categories.length > 0 && !isReboundMode && (
+        {categories.length > 0 && (
           <CategoryBudgetManager
             categories={categories}
             categoryBudgets={categoryBudgets}
@@ -387,6 +465,13 @@ export default function App() {
             isCategoryMode={isCategoryMode}
             setIsCategoryMode={setIsCategoryMode}
             categorySummaries={categorySummaries}
+            lockedCategoryBudgets={lockedCategoryBudgets}
+            onSetCategoryBudget={handleSetCategoryBudget}
+            onClearCategoryLock={handleClearCategoryLock}
+            onClearAllCategoryLocks={handleClearAllCategoryLocks}
+            isReboundMode={isReboundMode}
+            reboundReductionPct={reboundReductionPct}
+            reboundPlan={reboundPlan}
           />
         )}
 
@@ -447,6 +532,8 @@ export default function App() {
           setItems(stores.map(enrichItemWithCatalog));
           setTargetBudget(null);
           setPctDelta(0);
+          setManualOverrides({});
+          setLockedCategoryBudgets({});
         }}
       />
     </div>

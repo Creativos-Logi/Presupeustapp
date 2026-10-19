@@ -400,6 +400,114 @@ function runTests() {
     assert(noNaN, 'Ninguna asignación resulta en NaN o Infinity cuando el CPR es 0');
   }
 
+  // Test 16: Bloqueo de categoría y redistribución automática del remanente en miles limpios
+  {
+    const multiCatStores = [
+      { id: 'c1', name: 'Camisetas A', category: 'CAMISETAS', currentBudget: 1000000, costPerMessage: 1000, effectiveness: 20.0 },
+      { id: 'c2', name: 'Camisetas B', category: 'CAMISETAS', currentBudget: 1000000, costPerMessage: 1000, effectiveness: 15.0 },
+      { id: 'j1', name: 'Conjuntos A', category: 'CONJUNTOS', currentBudget: 1000000, costPerMessage: 1200, effectiveness: 18.0 },
+      { id: 'j2', name: 'Conjuntos B', category: 'CONJUNTOS', currentBudget: 1000000, costPerMessage: 1200, effectiveness: 14.0 },
+      { id: 'v1', name: 'Vestidos A', category: 'VESTIDOS', currentBudget: 1000000, costPerMessage: 800, effectiveness: 16.0 },
+    ];
+    const totalTarget = 5000000;
+    // El usuario bloquea CONJUNTOS en $1,500,000 COP
+    const lockedCategories = { 'CONJUNTOS': 1500000 };
+    const freeForUnlocked = totalTarget - 1500000; // 3,500,000 COP
+
+    // Redistribución entre CAMISETAS (base 2M) y VESTIDOS (base 1M)
+    const baseUnlockedSum = 3000000;
+    const catBudgets = {
+      ...lockedCategories,
+      'CAMISETAS': Math.floor((2000000 / baseUnlockedSum) * freeForUnlocked / 1000) * 1000,
+      'VESTIDOS': Math.floor((1000000 / baseUnlockedSum) * freeForUnlocked / 1000) * 1000,
+    };
+    catBudgets['CAMISETAS'] += 1000; // Asignación de remanente
+
+    const result = optimizeBudget(multiCatStores, {
+      targetBudget: totalTarget,
+      categoryBudgets: catBudgets,
+      roundingStep: 1000
+    });
+
+    const totalAllocated = result.optimizedItems.reduce((acc, it) => acc + it.newBudget, 0);
+    assert(totalAllocated === totalTarget, `Suma total asignada a categorías con bloqueo cuadra exactamente al target ($${totalAllocated} === $${totalTarget})`);
+
+    const conjuntosTotal = result.optimizedItems
+      .filter(it => it.category === 'CONJUNTOS')
+      .reduce((acc, it) => acc + it.newBudget, 0);
+    assert(conjuntosTotal === 1500000, `Categoría CONJUNTOS recibe exactamente el monto bloqueado ($${conjuntosTotal} === $1,500,000)`);
+  }
+
+  // Test 17: Plan de Re-escalada con segmentación por categoría y categoryReboundSummaries
+  {
+    const reboundStores = [
+      { id: 'c1', name: 'Camisetas A', category: 'CAMISETAS', currentBudget: 1000000, costPerMessage: 1000, effectiveness: 20.0 },
+      { id: 'j1', name: 'Conjuntos A', category: 'CONJUNTOS', currentBudget: 1000000, costPerMessage: 1200, effectiveness: 18.0 }
+    ];
+
+    const reboundResult = planTwoPhaseRedistribution(reboundStores, {
+      baseBudget: 2000000,
+      reductionPct: 30, // -30% el fin de semana
+      reboundTargetBudget: 2000000,
+      roundingStep: 1000,
+      categoryBudgets: {
+        'CAMISETAS': 1200000,
+        'CONJUNTOS': 800000
+      }
+    });
+
+    assert(Array.isArray(reboundResult.categoryReboundSummaries), 'categoryReboundSummaries existe y es un array');
+    assert(reboundResult.categoryReboundSummaries.length === 2, 'Contiene resúmenes para ambas categorías');
+
+    const camisasSummary = reboundResult.categoryReboundSummaries.find(s => s.category === 'CAMISETAS');
+    assert(camisasSummary.mondayBudget === 1200000, `Presupuesto Lunes de CAMISETAS respeta el presupuesto asignado ($${camisasSummary.mondayBudget} === $1,200,000)`);
+    assert(camisasSummary.weekendBudget < camisasSummary.mondayBudget, `Presupuesto Finde de CAMISETAS es menor ($${camisasSummary.weekendBudget} < $${camisasSummary.mondayBudget})`);
+    assert(camisasSummary.reactivationDelta > 0, `Salto de reactivación es positivo (+$${camisasSummary.reactivationDelta})`);
+  }
+
+  // Test 18: Sin Infinity ni NaN en projectedMessages y efectividad cuando CPR = 0
+  {
+    const zeroCprList = [
+      { id: 'z1', name: 'Tienda Nueva', category: 'CAMISETAS', currentBudget: 0, costPerMessage: 0, effectiveness: 15.0 }
+    ];
+
+    const result = optimizeBudget(zeroCprList, {
+      targetBudget: 100000,
+      roundingStep: 1000
+    });
+
+    const item = result.optimizedItems[0];
+    assert(item.projectedMessages === 0, `Mensajes proyectados son 0 en lugar de Infinity cuando CPR es 0 (actual: ${item.projectedMessages})`);
+    assert(!isNaN(item.projectedEffectiveMessages), `Mensajes efectivos proyectados no son NaN (actual: ${item.projectedEffectiveMessages})`);
+    assert(!isNaN(result.summary.newWeightedEff), `Efectividad ponderada en summary no es NaN (actual: ${result.summary.newWeightedEff})`);
+  }
+
+  // Test 19: Bloqueo manual de tienda en planTwoPhaseRedistribution
+  {
+    const reboundStores = [
+      { id: 's1', name: 'Tienda Bloqueada', currentBudget: 500000, costPerMessage: 1000, effectiveness: 20.0 },
+      { id: 's2', name: 'Tienda Libre', currentBudget: 500000, costPerMessage: 1000, effectiveness: 15.0 }
+    ];
+
+    const reboundResult = planTwoPhaseRedistribution(reboundStores, {
+      baseBudget: 1000000,
+      reductionPct: 30,
+      reboundTargetBudget: 1000000,
+      roundingStep: 1000,
+      manualOverrides: {
+        's1': 600000
+      }
+    });
+
+    const s1 = reboundResult.combinedItems.find(it => it.id === 's1');
+    const s2 = reboundResult.combinedItems.find(it => it.id === 's2');
+
+    assert(s1.mondayBudget === 600000, `Tienda bloqueada s1 recibe exactamente $600,000 en Lunes ($${s1.mondayBudget})`);
+    assert(s1.isManualLocked === true, 's1 está marcada como bloqueada en combinedItems');
+    assert(s2.mondayBudget === 400000, `Tienda libre s2 recibe el remanente de $400,000 en Lunes ($${s2.mondayBudget})`);
+    assert(s1.mondayBudget + s2.mondayBudget === 1000000, 'La suma total de Lunes con tiendas bloqueadas es exactamente $1,000,000');
+  }
+
   console.log(`\nResultados: ${passed} pasadas, ${failed} fallidas`);
   if (failed > 0) process.exit(1);
 }

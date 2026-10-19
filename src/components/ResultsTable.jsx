@@ -66,9 +66,14 @@ export default function ResultsTable({
   const reboundTotalMonday = reboundItemsToRender.reduce((acc, it) => acc + (it.mondayBudget || 0), 0);
   const reboundTotalDelta = reboundTotalMonday - reboundTotalWeekend;
 
-  const lockedItemsCount = itemsToRender.filter(it => it.isManualLocked).length;
-  const totalLockedBudget = itemsToRender.filter(it => it.isManualLocked).reduce((acc, it) => acc + (it.newBudget || 0), 0);
-  const remainingBudgetForUnlocked = itemsToRender.filter(it => !it.isManualLocked).reduce((acc, it) => acc + (it.newBudget || 0), 0);
+  const activeItemsForLocks = isReboundMode ? reboundItemsToRender : itemsToRender;
+  const lockedItemsCount = activeItemsForLocks.filter(it => it.isManualLocked).length;
+  const totalLockedBudget = isReboundMode
+    ? activeItemsForLocks.filter(it => it.isManualLocked).reduce((acc, it) => acc + (it.mondayBudget || 0), 0)
+    : activeItemsForLocks.filter(it => it.isManualLocked).reduce((acc, it) => acc + (it.newBudget || 0), 0);
+  const remainingBudgetForUnlocked = isReboundMode
+    ? activeItemsForLocks.filter(it => !it.isManualLocked).reduce((acc, it) => acc + (it.mondayBudget || 0), 0)
+    : activeItemsForLocks.filter(it => !it.isManualLocked).reduce((acc, it) => acc + (it.newBudget || 0), 0);
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col gap-3">
@@ -256,9 +261,48 @@ export default function ResultsTable({
                       </span>
                     </td>
 
-                    {/* Presupuesto Lunes */}
-                    <td className="py-2.5 px-3 text-right font-bold text-purple-300">
-                      ${item.mondayBudget.toLocaleString()}
+                    {/* Presupuesto Lunes (Editable / Bloqueable) */}
+                    <td className="py-2 px-3 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <div className="flex items-center">
+                          <span className="text-slate-500 text-[11px] mr-1">$</span>
+                          <input
+                            type="number"
+                            step="1000"
+                            min="0"
+                            value={item.isManualLocked ? (item.manualBudget !== undefined ? item.manualBudget : item.mondayBudget) : item.mondayBudget}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value);
+                              if (!isNaN(val) && val >= 0) {
+                                onSetManualBudget(item.id, val);
+                              }
+                            }}
+                            className={`font-mono text-xs text-right py-0.5 px-1.5 rounded w-24 border focus:outline-none transition ${
+                              item.isManualLocked
+                                ? 'bg-amber-950/70 border-amber-500/70 text-amber-300 font-bold focus:border-amber-400'
+                                : 'bg-slate-950/60 border-slate-700 text-purple-300 font-bold focus:border-purple-400 hover:border-slate-600'
+                            }`}
+                            title={item.isManualLocked ? 'Presupuesto Lunes fijado manualmente. Clic en candado para desbloquear.' : 'Presupuesto Lunes proyectado. Modifícalo para fijarlo manualmente.'}
+                          />
+                        </div>
+                        {item.isManualLocked ? (
+                          <button
+                            onClick={() => onClearManualBudget(item.id)}
+                            title="Desbloquear tienda (volver a optimización automática de Lunes)"
+                            className="p-1 rounded bg-amber-950/80 border border-amber-600/70 text-amber-400 hover:bg-rose-950 hover:border-rose-700 hover:text-rose-300 transition"
+                          >
+                            <Lock className="w-3.5 h-3.5" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => onSetManualBudget(item.id, item.mondayBudget)}
+                            title="Bloquear este presupuesto para el Lunes"
+                            className="opacity-30 hover:opacity-100 p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-amber-300 transition"
+                          >
+                            <Unlock className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </td>
 
                     {/* Salto de Reactivación (Lunes - Finde) */}
