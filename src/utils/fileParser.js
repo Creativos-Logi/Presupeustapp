@@ -70,8 +70,8 @@ export function cleanNumericValue(val) {
  */
 const COLUMN_PATTERNS = {
   name: [
-    'tienda', 'tienda linea', 'nombre', 'nombre de la campana', 'campana',
-    'cuenta', 'store', 'linea', 'producto tienda', 'id tienda', 'pagina', 'cliente'
+    'linea', 'tienda linea', 'tienda', 'nombre', 'nombre de la campana', 'campana',
+    'cuenta', 'store', 'producto tienda', 'id tienda', 'pagina', 'cliente'
   ],
   costPerMessage: [
     'costo por resultado', 'costo por mensaje', 'costo x mensaje', 'costo mensaje',
@@ -95,7 +95,9 @@ const COLUMN_PATTERNS = {
   product: ['producto', 'product', 'articulo', 'item'],
   category: ['categoria', 'category', 'nicho', 'linea de producto'],
   trafiker: ['trafiker', 'trafficker', 'media buyer', 'encargado'],
-  coordinator: ['coordinador', 'coordinator', 'lider']
+  coordinator: ['coordinador', 'coordinator', 'lider'],
+  bpo: ['bpo', 'agencia', 'empresa'],
+  status: ['estado', 'status', 'activo']
 };
 
 /**
@@ -123,6 +125,140 @@ export function identifyColumns(headers) {
   });
 
   return mapping;
+}
+
+/**
+ * Agrupa y consolida filas por tienda (ideal para reportes horarios de WhatsApp o exportes de campañas)
+ * Suma mensajes y cantadas, calcula efectividad real = (cantadas / mensajes * 100) y extrae metadatos.
+ */
+export function aggregateRowsByStore(rawRows, colMap) {
+  const storeMap = new Map();
+
+  for (let r = 0; r < rawRows.length; r++) {
+    const row = rawRows[r];
+    if (!row || row.length === 0) continue;
+
+    const rawName = String(row[colMap.name] || '').trim();
+    if (!rawName || rawName.toUpperCase() === 'TOTAL' || rawName.toUpperCase() === 'PROMEDIO') continue;
+
+    const storeKey = rawName.toLowerCase();
+    const catalogMatch = findInCatalog(rawName);
+    // Usar la tipografía oficial del catálogo solo si coincide con el nombre del archivo
+    const canonicalName = (catalogMatch && catalogMatch.name.toLowerCase() === storeKey) ? catalogMatch.name : rawName;
+
+    // Extraer valores numéricos
+    const hasBudget = colMap.budget !== undefined;
+    const hasCost = colMap.costPerMessage !== undefined;
+    const hasMsgs = colMap.messages !== undefined;
+    const hasCantadas = colMap.cantadas !== undefined;
+    const hasEff = colMap.effectiveness !== undefined;
+
+    const rowBudget = hasBudget ? cleanNumericValue(row[colMap.budget]) : 0;
+    const rowCost = hasCost ? cleanNumericValue(row[colMap.costPerMessage]) : 0;
+    const rowMsgs = hasMsgs ? cleanNumericValue(row[colMap.messages]) : 0;
+    const rowCantadas = hasCantadas ? cleanNumericValue(row[colMap.cantadas]) : 0;
+    const rowEff = hasEff ? cleanNumericValue(row[colMap.effectiveness]) : undefined;
+
+    // Metadatos
+    const rowProduct = colMap.product !== undefined ? String(row[colMap.product] || '').trim() : '';
+    const rowCategory = colMap.category !== undefined ? String(row[colMap.category] || '').trim() : '';
+    const rowCoordinator = colMap.coordinator !== undefined ? String(row[colMap.coordinator] || '').trim() : '';
+    const rowTrafiker = colMap.trafiker !== undefined ? String(row[colMap.trafiker] || '').trim() : '';
+    const rowBpo = colMap.bpo !== undefined ? String(row[colMap.bpo] || '').trim() : '';
+    const rowStatus = colMap.status !== undefined ? String(row[colMap.status] || '').trim() : '';
+
+    if (!storeMap.has(storeKey)) {
+      storeMap.set(storeKey, {
+        name: canonicalName,
+        totalBudget: 0,
+        hasBudget,
+        costSum: 0,
+        costCount: 0,
+        hasCost,
+        totalMessages: 0,
+        hasMsgs,
+        totalCantadas: 0,
+        hasCantadas,
+        effSum: 0,
+        effCount: 0,
+        hasEff,
+        product: rowProduct || (catalogMatch ? catalogMatch.product : 'GENERAL'),
+        category: rowCategory || rowProduct || (catalogMatch ? catalogMatch.category : 'GENERAL'),
+        coordinator: rowCoordinator || (catalogMatch ? catalogMatch.coordinator : 'SIN ASIGNAR'),
+        trafiker: rowTrafiker || (catalogMatch ? catalogMatch.trafiker : 'SIN ASIGNAR'),
+        bpo: rowBpo || (catalogMatch ? catalogMatch.group : ''),
+        status: rowStatus || (catalogMatch ? catalogMatch.status : 'ACTIVA'),
+        rowCount: 0
+      });
+    }
+
+    const s = storeMap.get(storeKey);
+    s.rowCount++;
+    if (hasBudget) s.totalBudget += rowBudget;
+    if (hasCost && rowCost > 0) {
+      s.costSum += rowCost;
+      s.costCount++;
+    }
+    if (hasMsgs) s.totalMessages += rowMsgs;
+    if (hasCantadas) s.totalCantadas += rowCantadas;
+    if (hasEff && rowEff !== undefined && !isNaN(rowEff)) {
+      s.effSum += rowEff;
+      s.effCount++;
+    }
+
+    if (rowProduct && (!s.product || s.product === 'GENERAL')) s.product = rowProduct;
+    if (rowCoordinator && (!s.coordinator || s.coordinator === 'SIN ASIGNAR')) s.coordinator = rowCoordinator;
+    if (rowTrafiker && (!s.trafiker || s.trafiker === 'SIN ASIGNAR')) s.trafiker = rowTrafiker;
+    if (rowBpo && !s.bpo) s.bpo = rowBpo;
+  }
+
+  const parsedItems = [];
+  let itemIndex = 1;
+
+  for (const [_, s] of storeMap.entries()) {
+    let effectiveness = undefined;
+    if (s.hasCantadas && s.hasMsgs) {
+      effectiveness = s.totalMessages > 0 ? Number(((s.totalCantadas / s.totalMessages) * 100).toFixed(2)) : 0;
+    } else if (s.hasEff && s.effCount > 0) {
+      effectiveness = Number((s.effSum / s.effCount).toFixed(2));
+    }
+
+    let costPerMessage = undefined;
+    if (s.hasCost && s.costCount > 0) {
+      costPerMessage = Number((s.costSum / s.costCount).toFixed(2));
+    } else if (s.hasBudget && s.hasMsgs && s.totalMessages > 0 && s.totalBudget > 0) {
+      costPerMessage = Number((s.totalBudget / s.totalMessages).toFixed(2));
+    } else if (s.hasCost) {
+      costPerMessage = 0;
+    }
+
+    const budget = s.hasBudget ? Number(s.totalBudget.toFixed(2)) : undefined;
+    const messages = s.hasMsgs ? Math.round(s.totalMessages) : undefined;
+    const cantadas = s.hasCantadas ? Math.round(s.totalCantadas) : undefined;
+
+    const catalogMatch = findInCatalog(s.name);
+    const item = {
+      id: `file-${itemIndex++}-${Math.random().toString(36).substr(2, 5)}`,
+      name: s.name,
+      currentBudget: budget,
+      costPerMessage: costPerMessage,
+      effectiveness: effectiveness,
+      currentMessages: messages !== undefined ? messages : (costPerMessage && budget ? Math.round(budget / costPerMessage) : undefined),
+      currentEffectiveMessages: cantadas !== undefined ? cantadas : (messages && effectiveness ? Math.round(messages * (effectiveness / 100)) : undefined),
+      cantadas,
+      category: s.category || (catalogMatch?.category || 'GENERAL'),
+      product: s.product || (catalogMatch?.product || 'GENERAL'),
+      trafiker: s.trafiker || (catalogMatch?.trafiker || 'SIN ASIGNAR'),
+      coordinator: s.coordinator || (catalogMatch?.coordinator || 'SIN ASIGNAR'),
+      bpo: s.bpo || (catalogMatch?.group || ''),
+      status: s.status || (catalogMatch?.status || 'ACTIVA'),
+      isDynamic: !catalogMatch
+    };
+
+    parsedItems.push(enrichItemWithCatalog(item));
+  }
+
+  return parsedItems;
 }
 
 /**
@@ -161,54 +297,8 @@ export function parseDelimitedText(text) {
     colMap.name = 0;
   }
 
-  const parsedItems = [];
-
-  for (let r = 1; r < rows.length; r++) {
-    const row = rows[r];
-    if (row.length === 0) continue;
-
-    const rawName = String(row[colMap.name] || '').trim();
-    if (!rawName || rawName.toUpperCase() === 'TOTAL' || rawName.toUpperCase() === 'PROMEDIO') continue;
-
-    const catalogMatch = findInCatalog(rawName);
-    const name = catalogMatch ? catalogMatch.name : rawName;
-
-    const hasExplicitCost = colMap.costPerMessage !== undefined;
-    const hasExplicitBudget = colMap.budget !== undefined;
-    const hasExplicitEff = colMap.effectiveness !== undefined || (colMap.cantadas !== undefined && colMap.messages !== undefined);
-    const hasExplicitMsgs = colMap.messages !== undefined;
-
-    const budget = hasExplicitBudget ? cleanNumericValue(row[colMap.budget]) : undefined;
-    const costPerMessage = hasExplicitCost ? cleanNumericValue(row[colMap.costPerMessage]) : undefined;
-    const rawEff = colMap.effectiveness !== undefined ? cleanNumericValue(row[colMap.effectiveness]) : undefined;
-    const messages = hasExplicitMsgs ? Math.round(cleanNumericValue(row[colMap.messages])) : undefined;
-    const cantadas = colMap.cantadas !== undefined ? cleanNumericValue(row[colMap.cantadas]) : undefined;
-
-    // Calcular efectividad si viene dada o derivarla de cantadas / mensajes
-    let effectiveness = rawEff;
-    if (effectiveness === undefined || effectiveness === null || isNaN(effectiveness)) {
-      if (cantadas !== undefined && messages !== undefined && cantadas > 0 && messages > 0) {
-        effectiveness = Number(((cantadas / messages) * 100).toFixed(2));
-      } else {
-        effectiveness = undefined;
-      }
-    }
-
-    const item = {
-      id: `file-${r}-${Math.random().toString(36).substr(2, 5)}`,
-      name,
-      currentBudget: budget !== undefined && budget > 0 ? budget : (hasExplicitBudget ? 0 : undefined),
-      costPerMessage: costPerMessage !== undefined && costPerMessage > 0 ? Number(costPerMessage.toFixed(2)) : (hasExplicitCost ? 0 : undefined),
-      effectiveness: effectiveness !== undefined && !isNaN(effectiveness) ? Number(effectiveness.toFixed(2)) : undefined,
-      currentMessages: messages !== undefined && messages > 0 ? messages : (costPerMessage && budget ? Math.round(budget / costPerMessage) : undefined),
-      category: colMap.category !== undefined ? String(row[colMap.category] || '') : (catalogMatch?.category || 'GENERAL'),
-      product: colMap.product !== undefined ? String(row[colMap.product] || '') : (catalogMatch?.product || 'GENERAL'),
-      trafiker: colMap.trafiker !== undefined ? String(row[colMap.trafiker] || '') : (catalogMatch?.trafiker || 'Sin asignar'),
-      coordinator: colMap.coordinator !== undefined ? String(row[colMap.coordinator] || '') : (catalogMatch?.coordinator || 'Sin asignar')
-    };
-
-    parsedItems.push(enrichItemWithCatalog(item));
-  }
+  const rawDataRows = rows.slice(1);
+  const parsedItems = aggregateRowsByStore(rawDataRows, colMap);
 
   // Detectar automáticamente el tipo de métricas presentes en el archivo
   const hasCost = colMap.costPerMessage !== undefined || colMap.budget !== undefined;
@@ -257,53 +347,8 @@ export function parseExcelWorkbook(dataBuffer) {
     colMap.name = 0;
   }
 
-  const parsedItems = [];
-
-  for (let r = headerRowIdx + 1; r < rows.length; r++) {
-    const row = rows[r];
-    if (!row || row.length === 0) continue;
-
-    const rawName = String(row[colMap.name] || '').trim();
-    if (!rawName || rawName.toUpperCase() === 'TOTAL' || rawName.toUpperCase() === 'PROMEDIO') continue;
-
-    const catalogMatch = findInCatalog(rawName);
-    const name = catalogMatch ? catalogMatch.name : rawName;
-
-    const hasExplicitCost = colMap.costPerMessage !== undefined;
-    const hasExplicitBudget = colMap.budget !== undefined;
-    const hasExplicitEff = colMap.effectiveness !== undefined || (colMap.cantadas !== undefined && colMap.messages !== undefined);
-    const hasExplicitMsgs = colMap.messages !== undefined;
-
-    const budget = hasExplicitBudget ? cleanNumericValue(row[colMap.budget]) : undefined;
-    const costPerMessage = hasExplicitCost ? cleanNumericValue(row[colMap.costPerMessage]) : undefined;
-    const rawEff = colMap.effectiveness !== undefined ? cleanNumericValue(row[colMap.effectiveness]) : undefined;
-    const messages = hasExplicitMsgs ? Math.round(cleanNumericValue(row[colMap.messages])) : undefined;
-    const cantadas = colMap.cantadas !== undefined ? cleanNumericValue(row[colMap.cantadas]) : undefined;
-
-    let effectiveness = rawEff;
-    if (effectiveness === undefined || effectiveness === null || isNaN(effectiveness)) {
-      if (cantadas !== undefined && messages !== undefined && cantadas > 0 && messages > 0) {
-        effectiveness = Number(((cantadas / messages) * 100).toFixed(2));
-      } else {
-        effectiveness = undefined;
-      }
-    }
-
-    const item = {
-      id: `excel-${r}-${Math.random().toString(36).substr(2, 5)}`,
-      name,
-      currentBudget: budget !== undefined && budget > 0 ? budget : (hasExplicitBudget ? 0 : undefined),
-      costPerMessage: costPerMessage !== undefined && costPerMessage > 0 ? Number(costPerMessage.toFixed(2)) : (hasExplicitCost ? 0 : undefined),
-      effectiveness: effectiveness !== undefined && !isNaN(effectiveness) ? Number(effectiveness.toFixed(2)) : undefined,
-      currentMessages: messages !== undefined && messages > 0 ? messages : (costPerMessage && budget ? Math.round(budget / costPerMessage) : undefined),
-      category: colMap.category !== undefined ? String(row[colMap.category] || '') : (catalogMatch?.category || 'GENERAL'),
-      product: colMap.product !== undefined ? String(row[colMap.product] || '') : (catalogMatch?.product || 'GENERAL'),
-      trafiker: colMap.trafiker !== undefined ? String(row[colMap.trafiker] || '') : (catalogMatch?.trafiker || 'Sin asignar'),
-      coordinator: colMap.coordinator !== undefined ? String(row[colMap.coordinator] || '') : (catalogMatch?.coordinator || 'Sin asignar')
-    };
-
-    parsedItems.push(enrichItemWithCatalog(item));
-  }
+  const rawDataRows = rows.slice(headerRowIdx + 1);
+  const parsedItems = aggregateRowsByStore(rawDataRows, colMap);
 
   const hasCost = colMap.costPerMessage !== undefined || colMap.budget !== undefined;
   const hasEff = colMap.effectiveness !== undefined || (colMap.cantadas !== undefined && colMap.messages !== undefined);

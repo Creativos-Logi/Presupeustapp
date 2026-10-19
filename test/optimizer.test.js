@@ -307,6 +307,99 @@ function runTests() {
     assert(expensiveStrict < expensivePermissive, `Factor CPR beta alto penaliza tienda con alto CPR (${expensiveStrict} < ${expensivePermissive})`);
   }
 
+  // Test 13: Techo estricto de presupuesto (Zero-Overflow) y números limpios en miles ($1,000 COP)
+  {
+    const stores = [
+      { id: '1', name: 'Tienda Alfa', currentBudget: 150000, costPerMessage: 680, effectiveness: 22.0 },
+      { id: '2', name: 'Tienda Beta', currentBudget: 120000, costPerMessage: 950, effectiveness: 14.5 },
+      { id: '3', name: 'Tienda Gamma', currentBudget: 180000, costPerMessage: 520, effectiveness: 18.2 },
+      { id: '4', name: 'Tienda Delta', currentBudget: 100000, costPerMessage: 800, effectiveness: 4.0 } // trampa
+    ];
+
+    const target = 650000;
+    const result = optimizeBudget(stores, {
+      targetBudget: target,
+      roundingStep: 1000,
+      minEffectivenessThreshold: 8.0
+    });
+
+    const totalAllocated = result.optimizedItems.reduce((acc, it) => acc + it.newBudget, 0);
+
+    // Techo estricto: la suma NUNCA supera el presupuesto objetivo
+    assert(totalAllocated <= target, `Presupuesto total jamás sobrepasa el techo ($${totalAllocated} <= $${target})`);
+    assert(totalAllocated === target, `Presupuesto total cuadra exactamente con el objetivo ($${totalAllocated} === $${target})`);
+
+    // Todos los valores son enteros limpios en miles (terminados en 000, no cifras raras como 34,123)
+    const allCleanThousands = result.optimizedItems.every(it => it.newBudget % 1000 === 0);
+    assert(allCleanThousands, 'Todos los presupuestos optimizados son múltiplos exactos de $1,000 COP (terminan en 000)');
+
+    const noOddNumbers = result.optimizedItems.every(it => Number.isInteger(it.newBudget));
+    assert(noOddNumbers, 'Ningún presupuesto tiene decimales ni centavos sueltos');
+  }
+
+  // Test 14: Bloqueo manual de presupuesto por tienda con redistribución del saldo remanente
+  {
+    const stores = [
+      { id: 's1', name: 'CAMISETAS 1', category: 'CAMISETAS', currentBudget: 100000, costPerMessage: 700, effectiveness: 12.0 },
+      { id: 's2', name: 'CAMISETAS 2', category: 'CAMISETAS', currentBudget: 100000, costPerMessage: 650, effectiveness: 18.0 },
+      { id: 's3', name: 'CAMISETAS 3', category: 'CAMISETAS', currentBudget: 100000, costPerMessage: 600, effectiveness: 15.0 }
+    ];
+
+    const target = 300000;
+
+    // Supongamos que el optimizador recomienda bajarle a CAMISETAS 1, pero el usuario
+    // decide manualmente fijarle $120,000 COP porque con menos presupuesto no rinde bien.
+    const manualOverrides = {
+      's1': 120000
+    };
+
+    const result = optimizeBudget(stores, {
+      targetBudget: target,
+      roundingStep: 1000,
+      manualOverrides
+    });
+
+    const s1 = result.optimizedItems.find(it => it.id === 's1');
+    const s2 = result.optimizedItems.find(it => it.id === 's2');
+    const s3 = result.optimizedItems.find(it => it.id === 's3');
+
+    // s1 debe tener exactamente el presupuesto bloqueado
+    assert(s1.newBudget === 120000, `Tienda bloqueada s1 recibe exactamente el presupuesto manual ($${s1.newBudget} === $120,000)`);
+    assert(s1.isManualLocked === true, 's1 está marcada como bloqueada manualmente (isManualLocked)');
+
+    // El resto (300,000 - 120,000 = 180,000) se reparte entre s2 y s3
+    const unlockedSum = s2.newBudget + s3.newBudget;
+    assert(unlockedSum === 180000, `El remanente de $180,000 se redistribuye entre las tiendas desbloqueadas (actual: $${unlockedSum})`);
+
+    // La tienda s2 con mayor efectividad (18% vs 15%) debe recibir más que s3
+    assert(s2.newBudget >= s3.newBudget, `Entre las desbloqueadas, s2 (18% eff) recibe más o igual que s3 (15% eff): $${s2.newBudget} >= $${s3.newBudget}`);
+
+    // La suma global es exactamente 300,000
+    const totalAllocated = result.optimizedItems.reduce((acc, it) => acc + it.newBudget, 0);
+    assert(totalAllocated === target, `La suma global con tiendas bloqueadas cuadra exactamente al target ($${totalAllocated} === $${target})`);
+  }
+
+  // Test 15: Manejo robusto cuando las tiendas tienen CPR en 0 (estado inicial pre-cargado)
+  {
+    const zeroCprStores = [
+      { id: 'z1', name: 'DRISTRI PRO 1', currentBudget: 0, costPerMessage: 0, effectiveness: 18.0 },
+      { id: 'z2', name: 'LATIN SHOP', currentBudget: 0, costPerMessage: 0, effectiveness: 14.0 },
+      { id: 'z3', name: 'SURAE', currentBudget: 0, costPerMessage: 0, effectiveness: 3.0 }
+    ];
+
+    const result = optimizeBudget(zeroCprStores, {
+      targetBudget: 300000,
+      roundingStep: 1000,
+      minEffectivenessThreshold: 8.0
+    });
+
+    const totalAllocated = result.optimizedItems.reduce((acc, it) => acc + it.newBudget, 0);
+    assert(totalAllocated === 300000, `Distribuye presupuesto a tiendas con CPR 0 sin errores de división ni NaN ($${totalAllocated} === $300,000)`);
+
+    const noNaN = result.optimizedItems.every(it => !isNaN(it.newBudget) && isFinite(it.newBudget));
+    assert(noNaN, 'Ninguna asignación resulta en NaN o Infinity cuando el CPR es 0');
+  }
+
   console.log(`\nResultados: ${passed} pasadas, ${failed} fallidas`);
   if (failed > 0) process.exit(1);
 }

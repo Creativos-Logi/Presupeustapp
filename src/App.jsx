@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import Header from './components/Header';
-import ImageUploader from './components/ImageUploader';
+import CsvUploader from './components/CsvUploader';
 import ProjectionControls from './components/ProjectionControls';
 import CategoryBudgetManager from './components/CategoryBudgetManager';
 import FilterBar from './components/FilterBar';
@@ -12,11 +12,11 @@ import HelpModal from './components/HelpModal';
 import CatalogModal from './components/CatalogModal';
 import { optimizeBudget, planTwoPhaseRedistribution } from './utils/optimizer';
 import { SAMPLE_DATASETS } from './utils/ocrParser';
-import { enrichItemWithCatalog } from './data/storeCatalog';
+import { enrichItemWithCatalog, getInitialCatalogPortfolio } from './data/storeCatalog';
 
 export default function App() {
-  // Estado principal de tiendas / líneas
-  const [items, setItems] = useState(() => SAMPLE_DATASETS.defaultCase.map(enrichItemWithCatalog));
+  // Estado principal de tiendas / líneas (79 tiendas oficiales precargadas con CPR=0 y Budget=0)
+  const [items, setItems] = useState(() => getInitialCatalogPortfolio());
   
   // Parámetros de simulación y proyección
   const [targetBudget, setTargetBudget] = useState(null);
@@ -25,7 +25,10 @@ export default function App() {
   const [maxVariationPct, setMaxVariationPct] = useState(50); // +/- 50%
   const [alpha, setAlpha] = useState(1.3); // Exponente efectividad
   const [beta, setBeta] = useState(1.0); // Factor de sensibilidad al costo x mensaje (CPR)
-  const [roundingStep, setRoundingStep] = useState(5000); // Redondeo por defecto a $5,000 COP
+  const [roundingStep, setRoundingStep] = useState(1000); // Redondeo por defecto a miles enteros ($1,000 COP)
+
+  // Bloqueo manual de presupuesto por tienda { [id]: number }
+  const [manualOverrides, setManualOverrides] = useState({});
 
   // Planificador de Re-escalada (Finde ➔ Lunes)
   const [isReboundMode, setIsReboundMode] = useState(false);
@@ -45,7 +48,7 @@ export default function App() {
   // UI estados auxiliares
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
-  const [isLoadingOcr, setIsLoadingOcr] = useState(false);
+  const [isLoadingFile, setIsLoadingFile] = useState(false);
 
   // Listas de opciones únicas extraídas de los ítems actuales
   const availableProducts = useMemo(() => {
@@ -151,9 +154,10 @@ export default function App() {
       maxVariationPct,
       alpha,
       beta,
-      roundingStep
+      roundingStep,
+      manualOverrides
     });
-  }, [filteredItems, effectiveTargetBudget, isCategoryMode, categoryBudgets, minEffectivenessThreshold, maxVariationPct, alpha, beta, roundingStep]);
+  }, [filteredItems, effectiveTargetBudget, isCategoryMode, categoryBudgets, minEffectivenessThreshold, maxVariationPct, alpha, beta, roundingStep, manualOverrides]);
 
   // Plan de Re-escalada en 2 fases si el modo está activo
   const reboundPlan = useMemo(() => {
@@ -252,10 +256,30 @@ export default function App() {
     setPctDelta(0);
   };
 
+  const handleSetManualBudget = (id, amount) => {
+    setManualOverrides(prev => ({
+      ...prev,
+      [id]: Math.max(0, Number(amount) || 0)
+    }));
+  };
+
+  const handleClearManualBudget = (id) => {
+    setManualOverrides(prev => {
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+  };
+
+  const handleClearAllManualBudgets = () => {
+    setManualOverrides({});
+  };
+
   const handleReset = () => {
-    setItems([]);
+    setItems(getInitialCatalogPortfolio());
     setTargetBudget(null);
     setPctDelta(0);
+    setManualOverrides({});
     handleResetFilters();
   };
 
@@ -314,14 +338,14 @@ export default function App() {
           />
         )}
 
-        {/* Fila 2: Carga de Captura / OCR + Controles de Proyección Focalizados */}
+        {/* Fila 2: Carga de Archivo CSV / Excel + Controles de Proyección Focalizados */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-5">
-            <ImageUploader
+            <CsvUploader
               items={items}
               onDataExtracted={handleDataExtracted}
-              isLoading={isLoadingOcr}
-              setIsLoading={setIsLoadingOcr}
+              isLoading={isLoadingFile}
+              setIsLoading={setIsLoadingFile}
             />
           </div>
 
@@ -376,6 +400,9 @@ export default function App() {
           displayItems={filteredItems}
           minEffectivenessThreshold={minEffectivenessThreshold}
           portfolioAvgCost={summary?.newBlendedCPM || 800}
+          manualOverrides={manualOverrides}
+          onSetManualBudget={handleSetManualBudget}
+          onClearManualBudget={handleClearManualBudget}
         />
 
         {/* Fila 6: Gráficos de Barras y Cuadrante de Rendimiento */}
@@ -400,6 +427,10 @@ export default function App() {
             filterLabel={filterBadgeInfo.label}
             isReboundMode={isReboundMode}
             reboundPlan={reboundPlan}
+            manualOverrides={manualOverrides}
+            onSetManualBudget={handleSetManualBudget}
+            onClearManualBudget={handleClearManualBudget}
+            onClearAllManualBudgets={handleClearAllManualBudgets}
           />
         )}
       </main>

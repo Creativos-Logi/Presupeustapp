@@ -1,4 +1,7 @@
 import * as XLSX from 'xlsx';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import {
   cleanNumericValue,
   identifyColumns,
@@ -6,6 +9,10 @@ import {
   parseExcelWorkbook
 } from '../src/utils/fileParser.js';
 import { mergeExtractedMetrics } from '../src/utils/dataMerger.js';
+import { getInitialCatalogPortfolio } from '../src/data/storeCatalog.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function runFileParserTests() {
   console.log('🧪 Iniciando pruebas de parsing de archivos CSV y Excel...\n');
@@ -155,6 +162,80 @@ DRISTRI PRO 1,1400000,750`;
     assert(store.costPerMessage === 750, 'Costo por resultado actualizado al nuevo ($750)');
     assert(store.effectiveness === 18.5, '¡CRUCIAL! La efectividad previa (18.5%) se preserva intacta y NO se resetea a 0%');
     assert(store.currentMessages === Math.round(1400000 / 750), 'Mensajes recalculados automáticamente');
+  }
+
+  // Test 8: getInitialCatalogPortfolio arranca con CPR en 0 y presupuesto en 0 para las 79 tiendas
+  {
+    const initialPortfolio = getInitialCatalogPortfolio();
+    assert(initialPortfolio.length === 79, `El portafolio inicial pre-carga exactamente 79 tiendas del catálogo (actual: ${initialPortfolio.length})`);
+    
+    const allCprZero = initialPortfolio.every(s => s.costPerMessage === 0);
+    assert(allCprZero, 'Todas las tiendas del catálogo arrancan con CPR (costPerMessage) exactamente en 0');
+
+    const allBudgetZero = initialPortfolio.every(s => s.currentBudget === 0);
+    assert(allBudgetZero, 'Todas las tiendas del catálogo arrancan con presupuesto en 0');
+
+    const allHaveNames = initialPortfolio.every(s => typeof s.name === 'string' && s.name.length > 0);
+    assert(allHaveNames, 'Todas las tiendas del catálogo tienen su nombre guardado para facilitar escaneo');
+  }
+
+  // Test 9: Ingesta y consolidación de CSV de tracking horario real (820 filas -> 85 tiendas consolidadas)
+  {
+    const fixturePath = path.join(__dirname, 'fixtures', 'tracking_820_rows.csv');
+    assert(fs.existsSync(fixturePath), 'El archivo fixture de tracking 820 filas existe');
+
+    const csvContent = fs.readFileSync(fixturePath, 'utf-8');
+    const parsed = parseDelimitedText(csvContent);
+
+    assert(parsed.detectedType === 'EFFECTIVENESS', 'El tracking se clasifica como EFFECTIVENESS al tener mensajes y cantadas');
+    assert(parsed.parsedItems.length === 85, `Consolida 820 filas horarias en exactamente 85 tiendas únicas (actual: ${parsed.parsedItems.length})`);
+
+    // Verificar agregación de OUTFIT FACTORY 2: 168 mensajes, 7 cantadas -> 4.17%
+    const outfit = parsed.parsedItems.find(it => it.name === 'OUTFIT FACTORY 2');
+    assert(outfit !== undefined, 'OUTFIT FACTORY 2 fue consolidada');
+    assert(outfit.currentMessages === 168, `OUTFIT FACTORY 2 suma 168 mensajes acumulados (actual: ${outfit?.currentMessages})`);
+    assert(outfit.cantadas === 7, `OUTFIT FACTORY 2 suma 7 cantadas (actual: ${outfit?.cantadas})`);
+    assert(outfit.effectiveness === 4.17, `Efectividad calculada exactamente (7/168 = 4.17%, actual: ${outfit?.effectiveness}%)`);
+
+    // Verificar agregación de TOP MARKET 1: 47 mensajes, 8 cantadas -> 17.02%
+    const topMarket = parsed.parsedItems.find(it => it.name === 'TOP MARKET 1');
+    assert(topMarket !== undefined, 'TOP MARKET 1 fue consolidada');
+    assert(topMarket.currentMessages === 47, `TOP MARKET 1 suma 47 mensajes (actual: ${topMarket?.currentMessages})`);
+    assert(topMarket.cantadas === 8, `TOP MARKET 1 suma 8 cantadas (actual: ${topMarket?.cantadas})`);
+    assert(topMarket.effectiveness === 17.02, `Efectividad calculada (8/47 = 17.02%, actual: ${topMarket?.effectiveness}%)`);
+
+    // Detección de tiendas nuevas fuera del catálogo maestro
+    const dynamicStores = parsed.parsedItems.filter(it => it.isDynamic);
+    assert(dynamicStores.length > 0, `Se detectaron ${dynamicStores.length} tiendas dinámicas nuevas fuera del catálogo`);
+
+    const hasSantaShop2W = dynamicStores.some(it => it.name === 'SANTA SHOP 2 W');
+    const hasDanteNova2 = dynamicStores.some(it => it.name === 'DANTE NOVA 2');
+    const hasRawstreet = dynamicStores.some(it => it.name === 'RAWSTREET 1');
+
+    assert(hasSantaShop2W, 'Detecta dinámicamente SANTA SHOP 2 W fuera del catálogo');
+    assert(hasDanteNova2, 'Detecta dinámicamente DANTE NOVA 2 fuera del catálogo');
+    assert(hasRawstreet, 'Detecta dinámicamente RAWSTREET 1 fuera del catálogo');
+  }
+
+  // Test 10: Fusión de tracking sobre catálogo con CPR 0 añade tiendas dinámicas y preserva metadata
+  {
+    const initialCatalog = getInitialCatalogPortfolio();
+    const fixturePath = path.join(__dirname, 'fixtures', 'tracking_820_rows.csv');
+    const csvContent = fs.readFileSync(fixturePath, 'utf-8');
+    const parsed = parseDelimitedText(csvContent);
+
+    const mergedPortfolio = mergeExtractedMetrics(initialCatalog, parsed.parsedItems, 'EFFECTIVENESS');
+
+    // Total de tiendas: 79 catálogo + 7 dinámicas nuevas = 86 tiendas totales
+    assert(mergedPortfolio.length >= 85, `El portafolio final contiene todas las tiendas consolidadas (${mergedPortfolio.length} tiendas)`);
+
+    const outfitInMerged = mergedPortfolio.find(it => it.name === 'OUTFIT FACTORY 2');
+    assert(outfitInMerged.costPerMessage === 0, 'OUTFIT FACTORY 2 mantiene CPR en 0 hasta que se suba o asigne costo');
+    assert(outfitInMerged.effectiveness === 4.17, 'OUTFIT FACTORY 2 adquiere su efectividad calculada (4.17%)');
+
+    const santaShop2W = mergedPortfolio.find(it => it.name === 'SANTA SHOP 2 W');
+    assert(santaShop2W !== undefined, 'La tienda dinámica SANTA SHOP 2 W está incorporada al portafolio');
+    assert(santaShop2W.isDynamic === true, 'SANTA SHOP 2 W está marcada como dinámica');
   }
 
   console.log(`\nResultados File Parser: ${passed} pasadas, ${failed} fallidas`);

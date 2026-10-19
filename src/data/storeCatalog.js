@@ -117,25 +117,33 @@ export function findInCatalog(storeName) {
   const exact = STORE_CATALOG.find(item => normalizeName(item.name) === cleanInput);
   if (exact) return exact;
 
-  // 2. Concordancia de contención mutua
+  const inputNums = cleanInput.match(/\d+/g)?.join('-') || '';
+
+  // 2. Concordancia de contención mutua respetando números de línea/tienda
   const partial = STORE_CATALOG.find(item => {
     const norm = normalizeName(item.name);
+    const itemNums = norm.match(/\d+/g)?.join('-') || '';
+    if (inputNums !== itemNums) return false;
     return norm.includes(cleanInput) || cleanInput.includes(norm);
   });
   if (partial) return partial;
 
-  // 3. Concordancia difusa por tokens
+  // 3. Concordancia difusa por tokens respetando números de línea/tienda
   const inputTokens = cleanInput.split(' ').filter(t => t.length > 2);
   if (inputTokens.length > 0) {
     let bestMatch = null;
     let maxMatchScore = 0;
 
     for (const item of STORE_CATALOG) {
-      const itemTokens = normalizeName(item.name).split(' ').filter(t => t.length > 2);
+      const norm = normalizeName(item.name);
+      const itemNums = norm.match(/\d+/g)?.join('-') || '';
+      if (inputNums !== itemNums) continue;
+
+      const itemTokens = norm.split(' ').filter(t => t.length > 2);
       const matches = inputTokens.filter(t => itemTokens.includes(t)).length;
       const score = matches / Math.max(inputTokens.length, itemTokens.length);
 
-      if (score > maxMatchScore && score >= 0.5) {
+      if (score > maxMatchScore && score > 0.6) {
         maxMatchScore = score;
         bestMatch = item;
       }
@@ -179,3 +187,27 @@ export function enrichItemWithCatalog(item) {
     status: item.status || (match ? match.status : 'ACTIVA')
   };
 }
+
+/**
+ * Genera el portafolio inicial pre-cargado con las 79 tiendas del catálogo maestro,
+ * manteniendo CPR en 0 y presupuesto en 0 para facilitar el escaneo instantáneo.
+ */
+export function getInitialCatalogPortfolio() {
+  return STORE_CATALOG.map((store, index) => ({
+    id: `cat-${index + 1}`,
+    name: store.name,
+    currentBudget: 0,
+    costPerMessage: 0,
+    effectiveness: 0,
+    currentMessages: 0,
+    currentEffectiveMessages: 0,
+    category: store.category || 'GENERAL',
+    product: store.product || 'GENERAL',
+    coordinator: store.coordinator || 'SIN ASIGNAR',
+    trafiker: store.trafiker || 'SIN ASIGNAR',
+    group: store.group || 'BTK',
+    campaign: store.campaign || '',
+    status: store.status || 'ACTIVA'
+  }));
+}
+

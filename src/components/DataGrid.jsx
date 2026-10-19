@@ -30,8 +30,8 @@ export default function DataGrid({ items, setItems, displayItems, minEffectivene
         // Recalcular mensajes actuales si cambia presupuesto o costo
         if (field === 'currentBudget' || field === 'costPerMessage') {
           const budget = field === 'currentBudget' ? parseFloat(value) || 0 : item.currentBudget;
-          const cost = field === 'costPerMessage' ? parseFloat(value) || 1 : item.costPerMessage;
-          updated.currentMessages = cost > 0 ? Math.round(budget / cost) : 0;
+          const cost = field === 'costPerMessage' ? (parseFloat(value) >= 0 ? parseFloat(value) : 0) : item.costPerMessage;
+          updated.currentMessages = cost > 0 ? Math.round(budget / cost) : (item.currentMessages || 0);
         }
         return updated;
       }
@@ -208,16 +208,16 @@ export default function DataGrid({ items, setItems, displayItems, minEffectivene
                       <div className="flex flex-col items-end gap-1">
                         <input
                           type="number"
-                          step="1"
-                          min="1"
+                          step="any"
+                          min="0"
                           value={item.costPerMessage}
-                          onChange={(e) => handleItemChange(item.id, 'costPerMessage', parseFloat(e.target.value) || 1)}
+                          onChange={(e) => handleItemChange(item.id, 'costPerMessage', parseFloat(e.target.value) || 0)}
                           className="bg-slate-950/40 border border-slate-800 rounded px-2 py-1 text-right text-xs text-sky-400 font-mono w-20 focus:outline-none focus:border-sky-500"
                         />
-                        <div className="w-20 bg-slate-800/80 h-1 rounded-full overflow-hidden" title={`CPR: $${item.costPerMessage} (Promedio: $${Math.round(portfolioAvgCost)})`}>
+                        <div className="w-20 bg-slate-800/80 h-1 rounded-full overflow-hidden" title={`CPR: $${item.costPerMessage || 0} (Promedio: $${Math.round(portfolioAvgCost)})`}>
                           <div
-                            className={`h-full rounded-full ${Number(item.costPerMessage) <= portfolioAvgCost ? 'bg-emerald-400' : Number(item.costPerMessage) > portfolioAvgCost * 1.3 ? 'bg-rose-500' : 'bg-sky-400'}`}
-                            style={{ width: `${Math.min(100, Math.max(10, (Number(item.costPerMessage) / (portfolioAvgCost * 1.8)) * 100))}%` }}
+                            className={`h-full rounded-full ${Number(item.costPerMessage) === 0 ? 'bg-slate-600' : Number(item.costPerMessage) <= portfolioAvgCost ? 'bg-emerald-400' : Number(item.costPerMessage) > portfolioAvgCost * 1.3 ? 'bg-rose-500' : 'bg-sky-400'}`}
+                            style={{ width: `${Number(item.costPerMessage) === 0 ? 0 : Math.min(100, Math.max(10, (Number(item.costPerMessage) / ((portfolioAvgCost || 1000) * 1.8)) * 100))}%` }}
                           />
                         </div>
                       </div>

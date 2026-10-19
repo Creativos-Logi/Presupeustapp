@@ -1,38 +1,11 @@
-import { createWorker } from 'tesseract.js';
 import { findInCatalog, STORE_CATALOG, enrichItemWithCatalog } from '../data/storeCatalog.js';
 import { REAL_TRACKING_DATASET } from '../data/realTrackingDataset.js';
 
 /**
- * Procesa una imagen (File, Blob o Base64 Data URL) y extrae líneas de datos tabulares.
- * 
- * @param {File|Blob|string} imageSource
- * @param {Function} onProgress - Callback para reportar % de avance (0 a 100)
- * @returns {Promise<{ rawText: string, parsedItems: Array }>}
+ * Función legacy (reemplazada por CsvUploader). Mantenida como stub seguro sin dependencias externas.
  */
 export async function extractDataFromImage(imageSource, onProgress = () => {}) {
-  let worker = null;
-  try {
-    onProgress({ status: 'Iniciando motor OCR...', progress: 0.1 });
-    worker = await createWorker('spa+eng');
-    
-    onProgress({ status: 'Analizando texto en la captura...', progress: 0.4 });
-    const ret = await worker.recognize(imageSource);
-    const rawText = ret.data.text || '';
-    
-    onProgress({ status: 'Estructurando métricas y cruzando con Catálogo Maestro...', progress: 0.9 });
-    const parsedItems = parseTableText(rawText);
-    
-    await worker.terminate();
-    onProgress({ status: '¡Listo!', progress: 1.0 });
-
-    return { rawText, parsedItems };
-  } catch (error) {
-    if (worker) {
-      try { await worker.terminate(); } catch (e) {}
-    }
-    console.error('Error en OCR:', error);
-    throw new Error('No se pudo procesar la imagen: ' + (error.message || error));
-  }
+  throw new Error('El escaneo por imagen/OCR ha sido reemplazado por la carga directa de archivos CSV y Excel.');
 }
 
 /**

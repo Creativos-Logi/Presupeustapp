@@ -36,10 +36,10 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
       const current = merged[existingIndex];
 
       // Verificamos qué valores vienen explícitamente en el archivo subido
-      const hasNewCost = typeof newItem.costPerMessage === 'number' && !isNaN(newItem.costPerMessage) && newItem.costPerMessage > 0;
-      const hasNewBudget = typeof newItem.currentBudget === 'number' && !isNaN(newItem.currentBudget) && newItem.currentBudget > 0;
-      const hasNewEff = typeof newItem.effectiveness === 'number' && !isNaN(newItem.effectiveness) && newItem.effectiveness > 0;
-      const hasNewMsgs = typeof newItem.currentMessages === 'number' && !isNaN(newItem.currentMessages) && newItem.currentMessages > 0;
+      const hasNewCost = typeof newItem.costPerMessage === 'number' && !isNaN(newItem.costPerMessage) && newItem.costPerMessage >= 0;
+      const hasNewBudget = typeof newItem.currentBudget === 'number' && !isNaN(newItem.currentBudget) && newItem.currentBudget >= 0;
+      const hasNewEff = typeof newItem.effectiveness === 'number' && !isNaN(newItem.effectiveness) && newItem.effectiveness >= 0;
+      const hasNewMsgs = typeof newItem.currentMessages === 'number' && !isNaN(newItem.currentMessages) && newItem.currentMessages >= 0;
 
       // Metadatos de catálogo (producto, categoria, trafiker, coordinador)
       const category = newItem.category && newItem.category !== 'GENERAL' ? newItem.category : current.category;
@@ -77,7 +77,7 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
           ...current,
           effectiveness,
           currentMessages: messages,
-          currentEffectiveMessages: Math.round(messages * (effectiveness / 100)),
+          currentEffectiveMessages: Math.round(messages * ((effectiveness || 0) / 100)),
           category,
           product,
           trafiker,
@@ -107,6 +107,11 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
       // Tienda nueva presente en el archivo subido que no existía antes
       merged.push({
         ...newItem,
+        currentBudget: newItem.currentBudget !== undefined ? newItem.currentBudget : 0,
+        costPerMessage: newItem.costPerMessage !== undefined ? newItem.costPerMessage : 0,
+        effectiveness: newItem.effectiveness !== undefined ? newItem.effectiveness : 0,
+        currentMessages: newItem.currentMessages !== undefined ? newItem.currentMessages : 0,
+        currentEffectiveMessages: newItem.currentEffectiveMessages !== undefined ? newItem.currentEffectiveMessages : 0,
         id: newItem.id || `item-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`
       });
     }

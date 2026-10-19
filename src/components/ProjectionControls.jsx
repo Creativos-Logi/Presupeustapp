@@ -124,10 +124,10 @@ export default function ProjectionControls({
           </button>
         </div>
 
-        {/* Indicador de Redondeo Comercial en múltiplos de $5,000 COP */}
+        {/* Indicador de Redondeo a Miles Enteros ($1,000 COP) sin exceder el presupuesto */}
         <div className="flex items-center gap-1.5 text-[11px] bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 text-emerald-400 font-medium">
           <Sparkles className="w-3.5 h-3.5" />
-          <span>Redondeo comercial: <strong>$5,000 COP</strong> (terminados en 0 o 5)</span>
+          <span>Redondeo a miles: <strong>$1,000 COP</strong> (sin pasarse del presupuesto)</span>
         </div>
       </div>
 

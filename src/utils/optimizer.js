@@ -35,25 +35,28 @@ export function optimizeBudget(items, options = {}) {
     targetBudgetPctDelta = 0,
     minEffectivenessThreshold = 8.0, // %
     maxVariationPct = 50, // +/- 50%
-    minLineBudget = 5,
-    roundingStep = 5000, // Redondeo por defecto a múltiplos de $5,000 COP (terminados en 0 o 5)
+    minLineBudget = 0,
+    roundingStep = 0,
     alpha = 1.3, // Sensibilidad a la efectividad (mayor = premia más calidad)
     beta = 1.0,  // Sensibilidad al costo por mensaje
+    manualOverrides = {} // Bloqueo manual de presupuesto por tienda: { [id]: number }
   } = options;
 
   // 1. Limpieza y preparación de datos base
   const cleanItems = items.map((item, idx) => {
     const currentBudget = Math.max(0, Number(item.currentBudget) || 0);
-    const costPerMessage = Math.max(0.01, Number(item.costPerMessage) || 1.0);
+    const costPerMessage = Math.max(0, Number(item.costPerMessage) || 0);
     const effectiveness = Math.max(0, Number(item.effectiveness) || 0); // en % (ej. 15%)
     const category = item.category || 'General';
     
-    // Si no se proporcionaron mensajes actuales, se derivan de presupuesto / costo
-    const currentMessages = item.currentMessages && item.currentMessages > 0
+    // Si no se proporcionaron mensajes actuales, se derivan de presupuesto / costo si cost > 0
+    const currentMessages = item.currentMessages !== undefined && item.currentMessages !== null
       ? Number(item.currentMessages)
       : (costPerMessage > 0 ? currentBudget / costPerMessage : 0);
 
-    const currentEffectiveMessages = currentMessages * (effectiveness / 100);
+    const currentEffectiveMessages = item.currentEffectiveMessages !== undefined && item.currentEffectiveMessages !== null
+      ? Number(item.currentEffectiveMessages)
+      : currentMessages * (effectiveness / 100);
 
     return {
       ...item,
@@ -80,14 +83,15 @@ export function optimizeBudget(items, options = {}) {
 
   const effectiveRoundingStep = (roundingStep > 0 && finalTargetBudget >= roundingStep) ? roundingStep : 0;
   if (effectiveRoundingStep > 0) {
-    finalTargetBudget = Math.round(finalTargetBudget / effectiveRoundingStep) * effectiveRoundingStep;
+    // Techo estricto: usar Math.floor para no sobrepasar jamás el presupuesto objetivo
+    finalTargetBudget = Math.floor(finalTargetBudget / effectiveRoundingStep) * effectiveRoundingStep;
   }
 
   // 2. Cálculo del Índice de Rendimiento Compuesto (IRC) y Gatekeeper
   const evaluatedItems = cleanItems.map(item => {
     const effRate = item.effectiveness / 100;
-    // Normalizamos el costo con una base nominal de 1000 COP para preservar rango numérico estable
-    const costRatio = 1000 / item.costPerMessage;
+    // Normalizamos el costo con una base nominal de 1000 COP; si costPerMessage es 0, no penaliza ni divide entre 0
+    const costRatio = item.costPerMessage > 0 ? (1000 / item.costPerMessage) : 1.0;
     const baseIRC = Math.pow(effRate, alpha) * Math.pow(costRatio, beta) * 100;
     const isBelowThreshold = item.effectiveness < minEffectivenessThreshold;
     const penaltyMultiplier = isBelowThreshold ? 0.35 : 1.0;
@@ -118,8 +122,6 @@ export function optimizeBudget(items, options = {}) {
       }
     });
 
-    // Si la suma de categoryBudgets difiere de finalTargetBudget, escalamos proporcionalmente
-    // para garantizar que la suma total asignada coincida exactamente con lo solicitado por el usuario
     const needsScaling = totalConfiguredCategoryBudget > 0 && Math.abs(totalConfiguredCategoryBudget - finalTargetBudget) > 1;
     const catScaleFactor = needsScaling ? (finalTargetBudget / totalConfiguredCategoryBudget) : 1;
 
@@ -128,7 +130,6 @@ export function optimizeBudget(items, options = {}) {
       const catItems = evaluatedItems.filter(it => it.category === cat);
       const catCurrentBudget = catItems.reduce((acc, it) => acc + it.currentBudget, 0);
       
-      // Presupuesto objetivo para esta categoría
       let catTargetBudget;
       if (categoryBudgets[cat] !== undefined && categoryBudgets[cat] !== null && !isNaN(categoryBudgets[cat])) {
         catTargetBudget = Number(categoryBudgets[cat]) * catScaleFactor;
@@ -138,7 +139,7 @@ export function optimizeBudget(items, options = {}) {
       }
 
       if (effectiveRoundingStep > 0) {
-        catTargetBudget = Math.round(catTargetBudget / effectiveRoundingStep) * effectiveRoundingStep;
+        catTargetBudget = Math.floor(catTargetBudget / effectiveRoundingStep) * effectiveRoundingStep;
       }
 
       const catOptimized = allocateBudgetWithConstraints({
@@ -147,41 +148,42 @@ export function optimizeBudget(items, options = {}) {
         totalCurrentBudget: catCurrentBudget,
         maxVariationPct,
         minLineBudget,
-        roundingStep: effectiveRoundingStep
+        roundingStep: effectiveRoundingStep,
+        manualOverrides
       });
 
       optimized.push(...catOptimized);
     });
 
-    // Cuadre final de residuos para que la suma total sea idéntica a finalTargetBudget
+    // Cuadre final de residuos para que la suma total coincida exactamente sin pasarse de finalTargetBudget
     const currentTotalAllocated = optimized.reduce((acc, it) => acc + it.newBudget, 0);
-    const residualDiff = finalTargetBudget - currentTotalAllocated;
+    let residualDiff = finalTargetBudget - currentTotalAllocated;
 
     if (effectiveRoundingStep > 0 && Math.abs(residualDiff) >= effectiveRoundingStep) {
-      let steps = Math.round(residualDiff / effectiveRoundingStep);
-      const sorted = [...optimized].sort((a, b) => b.adjustedIRC - a.adjustedIRC);
-      let s = 0;
-      while (steps > 0 && s < sorted.length * 4) {
-        const it = sorted[s % sorted.length];
-        if (!it.isBelowThreshold || sorted.every(x => x.isBelowThreshold)) {
-          it.newBudget += effectiveRoundingStep;
-          steps--;
+      let steps = Math.floor(residualDiff / effectiveRoundingStep);
+      const unlockedSorted = [...optimized]
+        .filter(it => !it.isManualLocked)
+        .sort((a, b) => b.adjustedIRC - a.adjustedIRC);
+
+      if (unlockedSorted.length > 0) {
+        let s = 0;
+        while (steps > 0 && s < unlockedSorted.length * 4) {
+          const it = unlockedSorted[s % unlockedSorted.length];
+          if (!it.isBelowThreshold || unlockedSorted.every(x => x.isBelowThreshold)) {
+            it.newBudget += effectiveRoundingStep;
+            steps--;
+          }
+          s++;
         }
-        s++;
-      }
-      while (steps < 0 && s < sorted.length * 4) {
-        const it = sorted[sorted.length - 1 - (s % sorted.length)];
-        if (it.newBudget >= effectiveRoundingStep) {
-          it.newBudget -= effectiveRoundingStep;
-          steps++;
+        while (steps < 0 && s < unlockedSorted.length * 4) {
+          const it = unlockedSorted[unlockedSorted.length - 1 - (s % unlockedSorted.length)];
+          if (it.newBudget >= effectiveRoundingStep) {
+            it.newBudget -= effectiveRoundingStep;
+            steps++;
+          }
+          s++;
         }
-        s++;
       }
-    } else if (effectiveRoundingStep === 0 && Math.abs(residualDiff) > 0.05 && optimized.length > 0) {
-      const bestIndex = optimized.findIndex(it => !it.isBelowThreshold) !== -1
-        ? optimized.findIndex(it => !it.isBelowThreshold)
-        : 0;
-      optimized[bestIndex].newBudget = Number((optimized[bestIndex].newBudget + residualDiff).toFixed(2));
     }
   } else {
     // Optimización global
@@ -191,7 +193,8 @@ export function optimizeBudget(items, options = {}) {
       totalCurrentBudget,
       maxVariationPct,
       minLineBudget,
-      roundingStep: effectiveRoundingStep
+      roundingStep: effectiveRoundingStep,
+      manualOverrides
     });
   }
 
@@ -289,82 +292,118 @@ export function optimizeBudget(items, options = {}) {
 }
 
 /**
- * Distribución proporcional con restricciones (Bounded Iterative Allocation)
+ * Distribución proporcional con restricciones y garantía de techo estricto (Zero-Overflow)
+ * Soportando bloqueo manual de tiendas y redistribución automática del saldo remanente
  */
 function allocateBudgetWithConstraints({
   items,
   totalTargetBudget,
   totalCurrentBudget,
   maxVariationPct,
-  minLineBudget = 5000,
-  roundingStep = 5000
+  minLineBudget = 0,
+  roundingStep = 0,
+  manualOverrides = {}
 }) {
   if (totalTargetBudget <= 0) {
-    return items.map(it => ({ ...it, newBudget: 0 }));
+    return items.map(it => ({ ...it, newBudget: 0, isManualLocked: false }));
   }
 
-  // Si se pide redondeo, normalizar totalTargetBudget como múltiplo
+  // Techo estricto: normalizar totalTargetBudget como múltiplo usando Math.floor
   const targetBudgetNormalized = roundingStep > 0
-    ? Math.round(totalTargetBudget / roundingStep) * roundingStep
+    ? Math.floor(totalTargetBudget / roundingStep) * roundingStep
     : totalTargetBudget;
 
-  const n = items.length;
-  // Factor de escala global si el presupuesto total cambia
-  const globalScale = totalCurrentBudget > 0 ? (targetBudgetNormalized / totalCurrentBudget) : 1;
+  // 1. Identificar tiendas bloqueadas manualmente
+  const lockedAllocations = {};
+  let totalLockedBudget = 0;
 
-  // Definir cotas [minBound, maxBound] para cada tienda
-  const bounds = items.map(item => {
+  items.forEach(it => {
+    if (manualOverrides && manualOverrides[it.id] !== undefined && manualOverrides[it.id] !== null) {
+      const rawManual = Math.max(0, Number(manualOverrides[it.id]) || 0);
+      const roundedManual = roundingStep > 0 ? Math.floor(rawManual / roundingStep) * roundingStep : rawManual;
+      lockedAllocations[it.id] = roundedManual;
+      totalLockedBudget += roundedManual;
+    }
+  });
+
+  // Presupuesto restante disponible para tiendas no bloqueadas
+  const freeBudget = Math.max(0, targetBudgetNormalized - totalLockedBudget);
+  const unlockedItems = items.filter(it => lockedAllocations[it.id] === undefined);
+
+  // Si todas las tiendas están bloqueadas
+  if (unlockedItems.length === 0) {
+    return items.map(it => ({
+      ...it,
+      newBudget: lockedAllocations[it.id] || 0,
+      isManualLocked: true,
+      manualBudget: lockedAllocations[it.id]
+    }));
+  }
+
+  // Si no hay presupuesto libre para las no bloqueadas
+  if (freeBudget <= 0) {
+    return items.map(it => {
+      const isLocked = lockedAllocations[it.id] !== undefined;
+      return {
+        ...it,
+        newBudget: isLocked ? lockedAllocations[it.id] : 0,
+        isManualLocked: isLocked,
+        manualBudget: isLocked ? lockedAllocations[it.id] : undefined
+      };
+    });
+  }
+
+  // Factor de escala para unlockedItems
+  const unlockedCurrentBudget = unlockedItems.reduce((acc, it) => acc + it.currentBudget, 0);
+  const globalScale = unlockedCurrentBudget > 0 ? (freeBudget / unlockedCurrentBudget) : 1;
+
+  // Cotas para unlocked items
+  const bounds = unlockedItems.map(item => {
     let minBound = Math.min(item.currentBudget, minLineBudget);
     let maxBound = item.currentBudget;
 
-    if (maxVariationPct && maxVariationPct > 0) {
+    if (maxVariationPct && maxVariationPct > 0 && item.currentBudget > 0) {
       const varFrac = maxVariationPct / 100;
       minBound = Math.max(minLineBudget, item.currentBudget * (1 - varFrac));
       maxBound = item.currentBudget * (1 + varFrac * Math.max(1, globalScale));
     } else {
       minBound = minLineBudget;
-      maxBound = targetBudgetNormalized;
+      maxBound = freeBudget;
     }
 
-    // Regla crucial: Si baja efectividad, no puede superar su presupuesto actual
-    // (a menos que el presupuesto global se reduzca y deba bajar)
     if (item.isBelowThreshold) {
       maxBound = Math.min(maxBound, item.currentBudget);
     }
 
-    // Asegurar coherencia
     if (minBound > maxBound) minBound = maxBound;
-
     return { minBound, maxBound };
   });
 
-  // Pesos basados en IRC y presupuesto actual
-  const weights = items.map(item => {
+  // Pesos basados en IRC
+  const weights = unlockedItems.map(item => {
     return Math.max(0.001, item.adjustedIRC * Math.sqrt(Math.max(1, item.currentBudget)));
   });
-
   const totalWeight = weights.reduce((acc, w) => acc + w, 0);
 
-  // Asignación inicial proporcional a pesos
-  let currentAllocations = items.map((item, i) => {
-    const rawAlloc = (weights[i] / totalWeight) * targetBudgetNormalized;
+  // Asignación inicial proporcional
+  let unlockedAllocations = unlockedItems.map((item, i) => {
+    const rawAlloc = (weights[i] / totalWeight) * freeBudget;
     return Math.min(bounds[i].maxBound, Math.max(bounds[i].minBound, rawAlloc));
   });
 
-  // Ajuste iterativo para cuadrar exactamente con targetBudgetNormalized respetando cotas
+  // Ajuste iterativo respetando cotas
   for (let iter = 0; iter < 20; iter++) {
-    const currentSum = currentAllocations.reduce((acc, val) => acc + val, 0);
-    const diff = targetBudgetNormalized - currentSum;
-    
+    const currentSum = unlockedAllocations.reduce((acc, val) => acc + val, 0);
+    const diff = freeBudget - currentSum;
     if (Math.abs(diff) < 0.05) break;
 
     let adjustableWeightSum = 0;
-    const canAdjust = items.map((_, i) => {
-      if (diff > 0 && currentAllocations[i] < bounds[i].maxBound) {
+    const canAdjust = unlockedItems.map((_, i) => {
+      if (diff > 0 && unlockedAllocations[i] < bounds[i].maxBound) {
         adjustableWeightSum += weights[i];
         return true;
       }
-      if (diff < 0 && currentAllocations[i] > bounds[i].minBound) {
+      if (diff < 0 && unlockedAllocations[i] > bounds[i].minBound) {
         adjustableWeightSum += weights[i];
         return true;
       }
@@ -373,71 +412,68 @@ function allocateBudgetWithConstraints({
 
     if (adjustableWeightSum === 0) break;
 
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < unlockedItems.length; i++) {
       if (canAdjust[i]) {
         const delta = (weights[i] / adjustableWeightSum) * diff;
-        currentAllocations[i] = Math.min(
+        unlockedAllocations[i] = Math.min(
           bounds[i].maxBound,
-          Math.max(bounds[i].minBound, currentAllocations[i] + delta)
+          Math.max(bounds[i].minBound, unlockedAllocations[i] + delta)
         );
       }
     }
   }
 
-  // APLICACIÓN DE REDONDEO COMERCIAL LIMPIO (Múltiplos de $5,000 terminados en 0 o 5)
+  // REDONDEO ESTRICTO A MILES ($1,000 COP) - ZERO OVERFLOW GUARANTEE
   if (roundingStep > 0) {
-    // 1. Redondear cada asignación individualmente
-    currentAllocations = currentAllocations.map(val => Math.max(0, Math.round(val / roundingStep) * roundingStep));
+    // 1. Redondear hacia abajo (floor) para asegurar que la suma inicial jamás sobrepase freeBudget
+    unlockedAllocations = unlockedAllocations.map(val => Math.max(0, Math.floor(val / roundingStep) * roundingStep));
 
-    // 2. Cuadrar la diferencia exacta por residuos en pasos de roundingStep
-    let roundedSum = currentAllocations.reduce((acc, val) => acc + val, 0);
-    let diff = targetBudgetNormalized - roundedSum;
-    let stepCount = Math.round(diff / roundingStep);
+    // 2. Distribuir el remanente en pasos de roundingStep (+1,000 COP) entre las mejores tiendas no bloqueadas
+    let currentUnlockedSum = unlockedAllocations.reduce((acc, val) => acc + val, 0);
+    let remainder = freeBudget - currentUnlockedSum;
 
-    // Índices ordenados por rendimiento IRC descendente
-    const sortedIndices = items.map((it, idx) => ({ idx, irc: it.adjustedIRC, isBelow: it.isBelowThreshold }))
+    const sortedIndices = unlockedItems
+      .map((it, idx) => ({ idx, irc: it.adjustedIRC, isBelow: it.isBelowThreshold }))
       .sort((a, b) => b.irc - a.irc);
 
-    if (stepCount > 0) {
-      // Sumar +roundingStep a las mejores tiendas no bloqueadas
-      let loop = 0;
-      while (stepCount > 0 && loop < sortedIndices.length * 5) {
-        const targetIdx = sortedIndices[loop % sortedIndices.length].idx;
-        if (!items[targetIdx].isBelowThreshold || sortedIndices.every(x => items[x.idx].isBelowThreshold)) {
-          currentAllocations[targetIdx] += roundingStep;
-          stepCount--;
-        }
-        loop++;
+    let loop = 0;
+    while (remainder >= roundingStep && loop < sortedIndices.length * 10) {
+      const targetIdx = sortedIndices[loop % sortedIndices.length].idx;
+      if (!unlockedItems[targetIdx].isBelowThreshold || sortedIndices.every(x => x.isBelow)) {
+        unlockedAllocations[targetIdx] += roundingStep;
+        remainder -= roundingStep;
       }
-    } else if (stepCount < 0) {
-      // Restar roundingStep empezando por las de menor rendimiento
-      const reversedIndices = [...sortedIndices].reverse();
-      let loop = 0;
-      while (stepCount < 0 && loop < reversedIndices.length * 5) {
-        const targetIdx = reversedIndices[loop % reversedIndices.length].idx;
-        if (currentAllocations[targetIdx] >= roundingStep) {
-          currentAllocations[targetIdx] -= roundingStep;
-          stepCount++;
-        }
-        loop++;
-      }
+      loop++;
     }
   } else {
-    // Cuadre final de centavos en la tienda de mejor rendimiento que no esté bloqueada
-    const finalSum = currentAllocations.reduce((acc, val) => acc + val, 0);
-    const finalDiff = targetBudgetNormalized - finalSum;
+    // Cuadre de centavos en la tienda de mejor rendimiento
+    const finalSum = unlockedAllocations.reduce((acc, val) => acc + val, 0);
+    const finalDiff = freeBudget - finalSum;
     if (Math.abs(finalDiff) > 0.01) {
-      const bestIndex = items.findIndex(it => !it.isBelowThreshold) !== -1 
-        ? items.findIndex(it => !it.isBelowThreshold) 
+      const bestIndex = unlockedItems.findIndex(it => !it.isBelowThreshold) !== -1 
+        ? unlockedItems.findIndex(it => !it.isBelowThreshold) 
         : 0;
-      currentAllocations[bestIndex] += finalDiff;
+      unlockedAllocations[bestIndex] += finalDiff;
     }
   }
 
-  return items.map((item, i) => ({
-    ...item,
-    newBudget: currentAllocations[i]
-  }));
+  // Mapear resultado final combinando locked y unlocked
+  const unlockedMap = new Map();
+  unlockedItems.forEach((it, idx) => {
+    unlockedMap.set(it.id, unlockedAllocations[idx]);
+  });
+
+  return items.map(it => {
+    const isLocked = lockedAllocations[it.id] !== undefined;
+    const finalAlloc = isLocked ? lockedAllocations[it.id] : (unlockedMap.get(it.id) || 0);
+
+    return {
+      ...it,
+      newBudget: finalAlloc,
+      isManualLocked: isLocked,
+      manualBudget: isLocked ? lockedAllocations[it.id] : undefined
+    };
+  });
 }
 
 /**
