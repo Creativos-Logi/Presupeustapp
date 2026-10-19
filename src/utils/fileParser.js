@@ -173,29 +173,34 @@ export function parseDelimitedText(text) {
     const catalogMatch = findInCatalog(rawName);
     const name = catalogMatch ? catalogMatch.name : rawName;
 
-    const budget = colMap.budget !== undefined ? cleanNumericValue(row[colMap.budget]) : 0;
-    const costPerMessage = colMap.costPerMessage !== undefined ? cleanNumericValue(row[colMap.costPerMessage]) : 0;
+    const hasExplicitCost = colMap.costPerMessage !== undefined;
+    const hasExplicitBudget = colMap.budget !== undefined;
+    const hasExplicitEff = colMap.effectiveness !== undefined || (colMap.cantadas !== undefined && colMap.messages !== undefined);
+    const hasExplicitMsgs = colMap.messages !== undefined;
+
+    const budget = hasExplicitBudget ? cleanNumericValue(row[colMap.budget]) : undefined;
+    const costPerMessage = hasExplicitCost ? cleanNumericValue(row[colMap.costPerMessage]) : undefined;
     const rawEff = colMap.effectiveness !== undefined ? cleanNumericValue(row[colMap.effectiveness]) : undefined;
-    const messages = colMap.messages !== undefined ? Math.round(cleanNumericValue(row[colMap.messages])) : 0;
-    const cantadas = colMap.cantadas !== undefined ? cleanNumericValue(row[colMap.cantadas]) : 0;
+    const messages = hasExplicitMsgs ? Math.round(cleanNumericValue(row[colMap.messages])) : undefined;
+    const cantadas = colMap.cantadas !== undefined ? cleanNumericValue(row[colMap.cantadas]) : undefined;
 
     // Calcular efectividad si viene dada o derivarla de cantadas / mensajes
     let effectiveness = rawEff;
     if (effectiveness === undefined || effectiveness === null || isNaN(effectiveness)) {
-      if (cantadas > 0 && messages > 0) {
+      if (cantadas !== undefined && messages !== undefined && cantadas > 0 && messages > 0) {
         effectiveness = Number(((cantadas / messages) * 100).toFixed(2));
       } else {
-        effectiveness = 0;
+        effectiveness = undefined;
       }
     }
 
     const item = {
       id: `file-${r}-${Math.random().toString(36).substr(2, 5)}`,
       name,
-      currentBudget: budget,
-      costPerMessage: costPerMessage > 0 ? Number(costPerMessage.toFixed(2)) : 0,
-      effectiveness: Number(effectiveness.toFixed(2)),
-      currentMessages: messages > 0 ? messages : (costPerMessage > 0 && budget > 0 ? Math.round(budget / costPerMessage) : 0),
+      currentBudget: budget !== undefined && budget > 0 ? budget : (hasExplicitBudget ? 0 : undefined),
+      costPerMessage: costPerMessage !== undefined && costPerMessage > 0 ? Number(costPerMessage.toFixed(2)) : (hasExplicitCost ? 0 : undefined),
+      effectiveness: effectiveness !== undefined && !isNaN(effectiveness) ? Number(effectiveness.toFixed(2)) : undefined,
+      currentMessages: messages !== undefined && messages > 0 ? messages : (costPerMessage && budget ? Math.round(budget / costPerMessage) : undefined),
       category: colMap.category !== undefined ? String(row[colMap.category] || '') : (catalogMatch?.category || 'GENERAL'),
       product: colMap.product !== undefined ? String(row[colMap.product] || '') : (catalogMatch?.product || 'GENERAL'),
       trafiker: colMap.trafiker !== undefined ? String(row[colMap.trafiker] || '') : (catalogMatch?.trafiker || 'Sin asignar'),
@@ -264,28 +269,33 @@ export function parseExcelWorkbook(dataBuffer) {
     const catalogMatch = findInCatalog(rawName);
     const name = catalogMatch ? catalogMatch.name : rawName;
 
-    const budget = colMap.budget !== undefined ? cleanNumericValue(row[colMap.budget]) : 0;
-    const costPerMessage = colMap.costPerMessage !== undefined ? cleanNumericValue(row[colMap.costPerMessage]) : 0;
+    const hasExplicitCost = colMap.costPerMessage !== undefined;
+    const hasExplicitBudget = colMap.budget !== undefined;
+    const hasExplicitEff = colMap.effectiveness !== undefined || (colMap.cantadas !== undefined && colMap.messages !== undefined);
+    const hasExplicitMsgs = colMap.messages !== undefined;
+
+    const budget = hasExplicitBudget ? cleanNumericValue(row[colMap.budget]) : undefined;
+    const costPerMessage = hasExplicitCost ? cleanNumericValue(row[colMap.costPerMessage]) : undefined;
     const rawEff = colMap.effectiveness !== undefined ? cleanNumericValue(row[colMap.effectiveness]) : undefined;
-    const messages = colMap.messages !== undefined ? Math.round(cleanNumericValue(row[colMap.messages])) : 0;
-    const cantadas = colMap.cantadas !== undefined ? cleanNumericValue(row[colMap.cantadas]) : 0;
+    const messages = hasExplicitMsgs ? Math.round(cleanNumericValue(row[colMap.messages])) : undefined;
+    const cantadas = colMap.cantadas !== undefined ? cleanNumericValue(row[colMap.cantadas]) : undefined;
 
     let effectiveness = rawEff;
     if (effectiveness === undefined || effectiveness === null || isNaN(effectiveness)) {
-      if (cantadas > 0 && messages > 0) {
+      if (cantadas !== undefined && messages !== undefined && cantadas > 0 && messages > 0) {
         effectiveness = Number(((cantadas / messages) * 100).toFixed(2));
       } else {
-        effectiveness = 0;
+        effectiveness = undefined;
       }
     }
 
     const item = {
       id: `excel-${r}-${Math.random().toString(36).substr(2, 5)}`,
       name,
-      currentBudget: budget,
-      costPerMessage: costPerMessage > 0 ? Number(costPerMessage.toFixed(2)) : 0,
-      effectiveness: Number(effectiveness.toFixed(2)),
-      currentMessages: messages > 0 ? messages : (costPerMessage > 0 && budget > 0 ? Math.round(budget / costPerMessage) : 0),
+      currentBudget: budget !== undefined && budget > 0 ? budget : (hasExplicitBudget ? 0 : undefined),
+      costPerMessage: costPerMessage !== undefined && costPerMessage > 0 ? Number(costPerMessage.toFixed(2)) : (hasExplicitCost ? 0 : undefined),
+      effectiveness: effectiveness !== undefined && !isNaN(effectiveness) ? Number(effectiveness.toFixed(2)) : undefined,
+      currentMessages: messages !== undefined && messages > 0 ? messages : (costPerMessage && budget ? Math.round(budget / costPerMessage) : undefined),
       category: colMap.category !== undefined ? String(row[colMap.category] || '') : (catalogMatch?.category || 'GENERAL'),
       product: colMap.product !== undefined ? String(row[colMap.product] || '') : (catalogMatch?.product || 'GENERAL'),
       trafiker: colMap.trafiker !== undefined ? String(row[colMap.trafiker] || '') : (catalogMatch?.trafiker || 'Sin asignar'),

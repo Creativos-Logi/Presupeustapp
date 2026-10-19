@@ -286,6 +286,27 @@ function runTests() {
     assert(storeC.mondayBudget <= storeC.currentBudget, `Tienda trampa C se mantiene controlada el lunes (${storeC.mondayBudget} <= ${storeC.currentBudget})`);
   }
 
+  // Test 12: Barra de Factor CPR (Sensibilidad Beta)
+  {
+    const stores = [
+      { id: '1', name: 'Tienda Barata', currentBudget: 500000, costPerMessage: 700, effectiveness: 15.0 },
+      { id: '2', name: 'Tienda Cara', currentBudget: 500000, costPerMessage: 900, effectiveness: 15.0 }
+    ];
+
+    // Con beta bajo/permisivo (0.5)
+    const resPermissive = optimizeBudget(stores, { targetBudget: 1000000, beta: 0.5, roundingStep: 5000 });
+    // Con beta estricto/alto (1.8)
+    const resStrict = optimizeBudget(stores, { targetBudget: 1000000, beta: 1.8, roundingStep: 5000 });
+
+    const cheapPermissive = resPermissive.optimizedItems.find(it => it.id === '1').newBudget;
+    const cheapStrict = resStrict.optimizedItems.find(it => it.id === '1').newBudget;
+    const expensivePermissive = resPermissive.optimizedItems.find(it => it.id === '2').newBudget;
+    const expensiveStrict = resStrict.optimizedItems.find(it => it.id === '2').newBudget;
+
+    assert(cheapStrict > cheapPermissive, `Factor CPR beta alto inyecta más presupuesto a tienda con bajo CPR (${cheapStrict} > ${cheapPermissive})`);
+    assert(expensiveStrict < expensivePermissive, `Factor CPR beta alto penaliza tienda con alto CPR (${expensiveStrict} < ${expensivePermissive})`);
+  }
+
   console.log(`\nResultados: ${passed} pasadas, ${failed} fallidas`);
   if (failed > 0) process.exit(1);
 }

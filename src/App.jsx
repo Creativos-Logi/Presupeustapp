@@ -24,6 +24,7 @@ export default function App() {
   const [minEffectivenessThreshold, setMinEffectivenessThreshold] = useState(8.0); // % corte
   const [maxVariationPct, setMaxVariationPct] = useState(50); // +/- 50%
   const [alpha, setAlpha] = useState(1.3); // Exponente efectividad
+  const [beta, setBeta] = useState(1.0); // Factor de sensibilidad al costo x mensaje (CPR)
   const [roundingStep, setRoundingStep] = useState(5000); // Redondeo por defecto a $5,000 COP
 
   // Planificador de Re-escalada (Finde ➔ Lunes)
@@ -149,9 +150,10 @@ export default function App() {
       minEffectivenessThreshold,
       maxVariationPct,
       alpha,
+      beta,
       roundingStep
     });
-  }, [filteredItems, effectiveTargetBudget, isCategoryMode, categoryBudgets, minEffectivenessThreshold, maxVariationPct, alpha, roundingStep]);
+  }, [filteredItems, effectiveTargetBudget, isCategoryMode, categoryBudgets, minEffectivenessThreshold, maxVariationPct, alpha, beta, roundingStep]);
 
   // Plan de Re-escalada en 2 fases si el modo está activo
   const reboundPlan = useMemo(() => {
@@ -164,9 +166,10 @@ export default function App() {
       minEffectivenessThreshold,
       maxVariationPct,
       alpha,
+      beta,
       categoryBudgets: isCategoryMode ? categoryBudgets : null
     });
-  }, [isReboundMode, filteredItems, effectiveTargetBudget, reboundReductionPct, reboundMondayBudget, roundingStep, minEffectivenessThreshold, maxVariationPct, alpha, isCategoryMode, categoryBudgets]);
+  }, [isReboundMode, filteredItems, effectiveTargetBudget, reboundReductionPct, reboundMondayBudget, roundingStep, minEffectivenessThreshold, maxVariationPct, alpha, beta, isCategoryMode, categoryBudgets]);
 
   // Tiendas no filtradas: mantienen su presupuesto actual exactamente igual (0 variación)
   const untouchedItems = useMemo(() => {
@@ -335,6 +338,8 @@ export default function App() {
               setMaxVariationPct={setMaxVariationPct}
               alpha={alpha}
               setAlpha={setAlpha}
+              beta={beta}
+              setBeta={setBeta}
               filterBadgeInfo={filterBadgeInfo}
               isReboundMode={isReboundMode}
               setIsReboundMode={setIsReboundMode}
@@ -370,14 +375,17 @@ export default function App() {
           setItems={setItems}
           displayItems={filteredItems}
           minEffectivenessThreshold={minEffectivenessThreshold}
+          portfolioAvgCost={summary?.newBlendedCPM || 800}
         />
 
         {/* Fila 6: Gráficos de Barras y Cuadrante de Rendimiento */}
-        {filteredItems.length > 0 && !isReboundMode && (
+        {filteredItems.length > 0 && (
           <ChartsView
             optimizedItems={rawOptimizedFiltered}
             displayItems={rawOptimizedFiltered}
             minEffectivenessThreshold={minEffectivenessThreshold}
+            isReboundMode={isReboundMode}
+            reboundPlan={reboundPlan}
           />
         )}
 

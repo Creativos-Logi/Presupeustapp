@@ -8,7 +8,7 @@ import { mergeExtractedMetrics } from '../utils/dataMerger';
 import { parseUploadedTabularFile, parseDelimitedText } from '../utils/fileParser';
 
 export default function ImageUploader({ items, onDataExtracted, isLoading, setIsLoading }) {
-  const [activeMetricType, setActiveMetricType] = useState('COST'); // 'COST', 'EFFECTIVENESS', 'BOTH'
+  const [activeMetricType, setActiveMetricType] = useState('BOTH'); // 'BOTH' por defecto para auto-detección
   const [pendingFile, setPendingFile] = useState(null); // { file, isTabular, parsedResult }
   const [showTypeModal, setShowTypeModal] = useState(false);
 
@@ -79,24 +79,10 @@ export default function ImageUploader({ items, onDataExtracted, isLoading, setIs
           return;
         }
 
-        const suggestedType = explicitType || result.detectedType || 'BOTH';
+        // Si el archivo tiene un tipo auto-detectado específico (ej. sólo COST o sólo EFFECTIVENESS), respetarlo
+        const suggestedType = result.detectedType || explicitType || 'BOTH';
 
-        // Si el usuario soltó el archivo sin haber elegido pestaña previa específica,
-        // mostrar modal para confirmar si es Costos, Efectividad o Ambas
-        if (!explicitType) {
-          setPendingFile({
-            file,
-            isTabular: true,
-            name: file.name,
-            result,
-            suggestedType
-          });
-          setShowTypeModal(true);
-          setIsLoading(false);
-          return;
-        }
-
-        // Aplicar directamente
+        // Aplicar directamente con el tipo detectado
         applyParsedData(result.parsedItems, suggestedType, file.name);
       } catch (err) {
         console.error(err);

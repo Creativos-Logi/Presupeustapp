@@ -175,6 +175,7 @@ export default function ResultsTable({
                 <th className="py-3 px-3">Producto</th>
                 <th className="py-3 px-3">Trafiker</th>
                 <th className="py-3 px-3 text-right">Presupuesto Actual</th>
+                <th className="py-3 px-3 text-right text-sky-400">CPR ($)</th>
                 <th className="py-3 px-3 text-right text-rose-300">Presupuesto Finde</th>
                 <th className="py-3 px-3 text-right text-purple-300">Presupuesto Lunes</th>
                 <th className="py-3 px-3 text-right text-emerald-400">Salto Reactivación</th>
@@ -213,6 +214,11 @@ export default function ResultsTable({
                     {/* Presupuesto Actual */}
                     <td className="py-2.5 px-3 text-right text-slate-400">
                       ${item.currentBudget.toLocaleString()}
+                    </td>
+
+                    {/* CPR (Costo x Mensaje) */}
+                    <td className="py-2.5 px-3 text-right text-sky-400 font-bold">
+                      ${Number(item.costPerMessage || 0).toFixed(0)}
                     </td>
 
                     {/* Presupuesto Finde */}
@@ -260,6 +266,7 @@ export default function ResultsTable({
               <tr>
                 <td colSpan="3" className="py-3 px-3 font-sans">TOTALES CONSOLIDADOS (FINDE ➔ LUNES)</td>
                 <td className="py-3 px-3 text-right">${reboundTotalActual.toLocaleString()}</td>
+                <td className="py-3 px-3 text-right text-sky-400">${summary?.newBlendedCPM || 0}</td>
                 <td className="py-3 px-3 text-right text-rose-400">${reboundTotalWeekend.toLocaleString()}</td>
                 <td className="py-3 px-3 text-right text-purple-300">${reboundTotalMonday.toLocaleString()}</td>
                 <td className="py-3 px-3 text-right text-emerald-400">+${reboundTotalDelta.toLocaleString()}</td>

@@ -86,10 +86,12 @@ export function optimizeBudget(items, options = {}) {
   // 2. Cálculo del Índice de Rendimiento Compuesto (IRC) y Gatekeeper
   const evaluatedItems = cleanItems.map(item => {
     const effRate = item.effectiveness / 100;
-    const baseIRC = (Math.pow(effRate, alpha) / Math.pow(item.costPerMessage, beta)) * 100;
+    // Normalizamos el costo con una base nominal de 1000 COP para preservar rango numérico estable
+    const costRatio = 1000 / item.costPerMessage;
+    const baseIRC = Math.pow(effRate, alpha) * Math.pow(costRatio, beta) * 100;
     const isBelowThreshold = item.effectiveness < minEffectivenessThreshold;
     const penaltyMultiplier = isBelowThreshold ? 0.35 : 1.0;
-    const adjustedIRC = Math.max(0.0001, baseIRC * penaltyMultiplier);
+    const adjustedIRC = Math.max(0.000001, baseIRC * penaltyMultiplier);
 
     return {
       ...item,
@@ -457,6 +459,7 @@ export function planTwoPhaseRedistribution(items, options = {}) {
     minEffectivenessThreshold = 8.0,
     maxVariationPct = 50,
     alpha = 1.3,
+    beta = 1.0, // Factor de sensibilidad al costo x mensaje (CPR)
     categoryBudgets = null
   } = options;
 
@@ -488,6 +491,7 @@ export function planTwoPhaseRedistribution(items, options = {}) {
     minEffectivenessThreshold,
     maxVariationPct,
     alpha,
+    beta,
     categoryBudgets
   });
 
@@ -498,6 +502,7 @@ export function planTwoPhaseRedistribution(items, options = {}) {
     minEffectivenessThreshold,
     maxVariationPct,
     alpha,
+    beta,
     categoryBudgets
   });
 

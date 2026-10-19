@@ -2,7 +2,7 @@ import React from 'react';
 import { Plus, Trash2, AlertCircle, Edit2, Layers, User, Briefcase, Tag } from 'lucide-react';
 import { getCatalogCategories, getCatalogProducts, getCatalogCoordinators, getCatalogTrafikers, findInCatalog, enrichItemWithCatalog } from '../data/storeCatalog';
 
-export default function DataGrid({ items, setItems, displayItems, minEffectivenessThreshold }) {
+export default function DataGrid({ items, setItems, displayItems, minEffectivenessThreshold, portfolioAvgCost = 800 }) {
   const CATEGORY_OPTIONS = getCatalogCategories();
   const PRODUCT_OPTIONS = getCatalogProducts();
   const COORDINATOR_OPTIONS = getCatalogCoordinators();
@@ -205,33 +205,49 @@ export default function DataGrid({ items, setItems, displayItems, minEffectivene
 
                     {/* Costo x Mensaje */}
                     <td className="py-2 px-3 text-right">
-                      <input
-                        type="number"
-                        step="1"
-                        min="1"
-                        value={item.costPerMessage}
-                        onChange={(e) => handleItemChange(item.id, 'costPerMessage', parseFloat(e.target.value) || 1)}
-                        className="bg-slate-950/40 border border-slate-800 rounded px-2 py-1 text-right text-xs text-sky-400 font-mono w-20 focus:outline-none focus:border-sky-500"
-                      />
+                      <div className="flex flex-col items-end gap-1">
+                        <input
+                          type="number"
+                          step="1"
+                          min="1"
+                          value={item.costPerMessage}
+                          onChange={(e) => handleItemChange(item.id, 'costPerMessage', parseFloat(e.target.value) || 1)}
+                          className="bg-slate-950/40 border border-slate-800 rounded px-2 py-1 text-right text-xs text-sky-400 font-mono w-20 focus:outline-none focus:border-sky-500"
+                        />
+                        <div className="w-20 bg-slate-800/80 h-1 rounded-full overflow-hidden" title={`CPR: $${item.costPerMessage} (Promedio: $${Math.round(portfolioAvgCost)})`}>
+                          <div
+                            className={`h-full rounded-full ${Number(item.costPerMessage) <= portfolioAvgCost ? 'bg-emerald-400' : Number(item.costPerMessage) > portfolioAvgCost * 1.3 ? 'bg-rose-500' : 'bg-sky-400'}`}
+                            style={{ width: `${Math.min(100, Math.max(10, (Number(item.costPerMessage) / (portfolioAvgCost * 1.8)) * 100))}%` }}
+                          />
+                        </div>
+                      </div>
                     </td>
 
                     {/* Efectividad */}
                     <td className="py-2 px-3 text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          max="100"
-                          value={item.effectiveness}
-                          onChange={(e) => handleItemChange(item.id, 'effectiveness', parseFloat(e.target.value) || 0)}
-                          className={`bg-slate-950/40 border rounded px-2 py-1 text-right text-xs font-mono w-16 focus:outline-none ${
-                            isLowEff 
-                              ? 'border-amber-800/80 text-amber-400 focus:border-amber-500' 
-                              : 'border-slate-800 text-purple-400 focus:border-purple-500'
-                          }`}
-                        />
-                        <span className="text-slate-500">%</span>
+                      <div className="flex flex-col items-end gap-1">
+                        <div className="flex items-center justify-end gap-1">
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max="100"
+                            value={item.effectiveness}
+                            onChange={(e) => handleItemChange(item.id, 'effectiveness', parseFloat(e.target.value) || 0)}
+                            className={`bg-slate-950/40 border rounded px-2 py-1 text-right text-xs font-mono w-16 focus:outline-none ${
+                              isLowEff 
+                                ? 'border-amber-800/80 text-amber-400 focus:border-amber-500' 
+                                : 'border-slate-800 text-purple-400 focus:border-purple-500'
+                            }`}
+                          />
+                          <span className="text-slate-500">%</span>
+                        </div>
+                        <div className="w-16 bg-slate-800/80 h-1 rounded-full overflow-hidden" title={`Efectividad: ${item.effectiveness}% (Umbral: ${minEffectivenessThreshold}%)`}>
+                          <div
+                            className={`h-full rounded-full ${isLowEff ? 'bg-amber-400' : 'bg-purple-400'}`}
+                            style={{ width: `${Math.min(100, Math.max(10, (Number(item.effectiveness) / 30) * 100))}%` }}
+                          />
+                        </div>
                       </div>
                     </td>
 

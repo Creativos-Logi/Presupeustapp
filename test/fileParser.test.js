@@ -134,6 +134,29 @@ DANTE NOVA,800000,950,842`;
     assert(store2.costPerMessage === 1400, 'Conserva costo previo de tienda 2 ($1,400) ya que el archivo no trajo costo');
   }
 
+  // Test 7: Resubida no destructiva - CSV de Costos preserva la efectividad previa
+  {
+    const initialPortfolio = [
+      { id: 't1', name: 'DRISTRI PRO 1', currentBudget: 1000000, costPerMessage: 1200, effectiveness: 18.5, currentMessages: 833 }
+    ];
+
+    // CSV típico de Meta Ads que SOLO trae Costos y Presupuestos (sin efectividad)
+    const costOnlyCsv = `Tienda,Presupuesto,Costo por resultado
+DRISTRI PRO 1,1400000,750`;
+
+    const parsedResult = parseDelimitedText(costOnlyCsv);
+    assert(parsedResult.parsedItems[0].effectiveness === undefined, 'El parser no asigna 0 a la efectividad ausente');
+
+    // Al fusionar con el portafolio
+    const merged = mergeExtractedMetrics(initialPortfolio, parsedResult.parsedItems, 'BOTH');
+    const store = merged.find(it => it.name === 'DRISTRI PRO 1');
+
+    assert(store.currentBudget === 1400000, 'Presupuesto actualizado al nuevo ($1,400,000)');
+    assert(store.costPerMessage === 750, 'Costo por resultado actualizado al nuevo ($750)');
+    assert(store.effectiveness === 18.5, '¡CRUCIAL! La efectividad previa (18.5%) se preserva intacta y NO se resetea a 0%');
+    assert(store.currentMessages === Math.round(1400000 / 750), 'Mensajes recalculados automáticamente');
+  }
+
   console.log(`\nResultados File Parser: ${passed} pasadas, ${failed} fallidas`);
   if (failed > 0) process.exit(1);
 }

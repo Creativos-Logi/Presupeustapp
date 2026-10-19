@@ -36,10 +36,10 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
       const current = merged[existingIndex];
 
       // Verificamos qué valores vienen explícitamente en el archivo subido
-      const hasNewCost = newItem.costPerMessage !== undefined && newItem.costPerMessage !== null && newItem.costPerMessage > 0;
-      const hasNewBudget = newItem.currentBudget !== undefined && newItem.currentBudget !== null && newItem.currentBudget > 0;
-      const hasNewEff = newItem.effectiveness !== undefined && newItem.effectiveness !== null && !isNaN(newItem.effectiveness);
-      const hasNewMsgs = newItem.currentMessages !== undefined && newItem.currentMessages !== null && newItem.currentMessages > 0;
+      const hasNewCost = typeof newItem.costPerMessage === 'number' && !isNaN(newItem.costPerMessage) && newItem.costPerMessage > 0;
+      const hasNewBudget = typeof newItem.currentBudget === 'number' && !isNaN(newItem.currentBudget) && newItem.currentBudget > 0;
+      const hasNewEff = typeof newItem.effectiveness === 'number' && !isNaN(newItem.effectiveness) && newItem.effectiveness > 0;
+      const hasNewMsgs = typeof newItem.currentMessages === 'number' && !isNaN(newItem.currentMessages) && newItem.currentMessages > 0;
 
       // Metadatos de catálogo (producto, categoria, trafiker, coordinador)
       const category = newItem.category && newItem.category !== 'GENERAL' ? newItem.category : current.category;
@@ -52,15 +52,15 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
         const cost = hasNewCost ? newItem.costPerMessage : current.costPerMessage;
         const budget = hasNewBudget ? newItem.currentBudget : current.currentBudget;
         const messages = hasNewMsgs ? newItem.currentMessages : (cost > 0 && budget > 0 ? Math.round(budget / cost) : current.currentMessages);
+        const effectiveness = hasNewEff ? newItem.effectiveness : (current.effectiveness || 0);
 
         merged[existingIndex] = {
           ...current,
-          ...newItem,
           currentBudget: budget,
           costPerMessage: cost,
           currentMessages: messages,
-          // Conserva la efectividad previa guardada si el archivo no la trae
-          effectiveness: current.effectiveness,
+          currentEffectiveMessages: Math.round(messages * (effectiveness / 100)),
+          effectiveness,
           category,
           product,
           trafiker,
@@ -68,10 +68,16 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
         };
       } else if (metricType === 'EFFECTIVENESS') {
         // PRIORIDAD AL ARCHIVO SUBIDO: actualiza Efectividad
+        const effectiveness = hasNewEff ? newItem.effectiveness : current.effectiveness;
+        const cost = current.costPerMessage;
+        const budget = current.currentBudget;
+        const messages = hasNewMsgs ? newItem.currentMessages : (cost > 0 && budget > 0 ? Math.round(budget / cost) : current.currentMessages);
+
         merged[existingIndex] = {
           ...current,
-          // La nueva efectividad sobreescribe 100% la anterior
-          effectiveness: hasNewEff ? newItem.effectiveness : current.effectiveness,
+          effectiveness,
+          currentMessages: messages,
+          currentEffectiveMessages: Math.round(messages * (effectiveness / 100)),
           category,
           product,
           trafiker,
@@ -86,11 +92,11 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
 
         merged[existingIndex] = {
           ...current,
-          ...newItem,
           currentBudget: budget,
           costPerMessage: cost,
           effectiveness,
           currentMessages: messages,
+          currentEffectiveMessages: Math.round(messages * ((effectiveness || 0) / 100)),
           category,
           product,
           trafiker,

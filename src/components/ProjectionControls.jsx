@@ -13,6 +13,8 @@ export default function ProjectionControls({
   setMaxVariationPct,
   alpha,
   setAlpha,
+  beta = 1.0,
+  setBeta = () => {},
   filterBadgeInfo,
   isReboundMode = false,
   setIsReboundMode = () => {},
@@ -356,11 +358,12 @@ export default function ProjectionControls({
         </div>
       </div>
 
-      {/* Ajustes avanzados: Variación máxima y Enfoque de Calidad */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-slate-800/80 text-xs">
+      {/* Ajustes avanzados: Variación máxima y Barras de Factores (Efectividad y CPR) */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-3 border-t border-slate-800/80 text-xs">
+        {/* Barra 1: Guardrail de Variación Máxima */}
         <div>
           <div className="flex items-center justify-between mb-1 text-slate-300">
-            <span>Variación Máxima por Tienda (Guardrail):</span>
+            <span>Variación Máxima (Guardrail):</span>
             <span className="font-mono font-semibold text-sky-400">±{maxVariationPct}%</span>
           </div>
           <input
@@ -373,31 +376,57 @@ export default function ProjectionControls({
             className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
           />
           <p className="text-[11px] text-slate-500 mt-1">
-            Evita cambios bruscos que desestabilicen el algoritmo de aprendizaje en Meta o Google Ads.
+            Protege el aprendizaje en Meta Ads limitando variaciones bruscas.
           </p>
         </div>
 
+        {/* Barra 2: Factor de Efectividad (Alpha) */}
         <div>
           <div className="flex items-center justify-between mb-1 text-slate-300">
             <span className="flex items-center gap-1">
               <Zap className="w-3.5 h-3.5 text-purple-400" />
-              Priorización de Calidad (Sensibilidad IRC):
+              Factor Efectividad (α):
             </span>
             <span className="font-mono font-semibold text-purple-400">
-              {alpha === 1.0 ? 'Equilibrado' : alpha > 1.3 ? 'Agresivo a Calidad' : 'Fuerte'}
+              {alpha.toFixed(1)}x ({alpha <= 1.1 ? 'Equilibrado' : alpha <= 1.4 ? 'Fuerte' : 'Agresivo'})
             </span>
           </div>
           <input
             type="range"
             min="1.0"
-            max="1.8"
+            max="2.0"
             step="0.1"
             value={alpha}
             onChange={(e) => setAlpha(parseFloat(e.target.value))}
             className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
           />
           <p className="text-[11px] text-slate-500 mt-1">
-            Premia más intensamente la efectividad por encima del mero volumen de mensajes baratos.
+            Premia más intensamente la efectividad por encima del volumen de mensajes.
+          </p>
+        </div>
+
+        {/* Barra 3: Factor de Costo por Resultado / CPR (Beta) */}
+        <div>
+          <div className="flex items-center justify-between mb-1 text-slate-300">
+            <span className="flex items-center gap-1">
+              <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+              Factor CPR / Costo (β):
+            </span>
+            <span className="font-mono font-semibold text-emerald-400">
+              {beta.toFixed(1)}x ({beta <= 0.8 ? 'Tolerante' : beta <= 1.2 ? 'Equilibrado' : beta <= 1.6 ? 'Exigente' : 'Muy Severo'})
+            </span>
+          </div>
+          <input
+            type="range"
+            min="0.5"
+            max="2.0"
+            step="0.1"
+            value={beta}
+            onChange={(e) => setBeta(parseFloat(e.target.value))}
+            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+          />
+          <p className="text-[11px] text-slate-500 mt-1">
+            Penaliza costos por mensaje elevados y premia tiendas con CPR más económico.
           </p>
         </div>
       </div>
