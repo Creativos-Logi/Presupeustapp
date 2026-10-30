@@ -39,6 +39,8 @@ export function optimizeBudget(items, options = {}) {
     roundingStep = 0,
     alpha = 1.3, // Sensibilidad a la efectividad (mayor = premia más calidad)
     beta = 1.0,  // Sensibilidad al costo por mensaje
+    categoryBudgets = null,
+    lockedCategoryBudgets = {}, // Bloqueo manual de presupuesto por categoría: { [catName]: number }
     manualOverrides = {} // Bloqueo manual de presupuesto por tienda: { [id]: number }
   } = options;
 
@@ -107,23 +109,44 @@ export function optimizeBudget(items, options = {}) {
 
   // 3. Algoritmo de Asignación con Guardrails y Restricciones
   // Verificamos si hay partición explícita de presupuesto por categoría
-  const { categoryBudgets = null } = options;
   let optimized = [];
 
   const categories = Array.from(new Set(evaluatedItems.map(it => it.category)));
 
   if (categoryBudgets && Object.keys(categoryBudgets).length > 0) {
-    // Calculamos la suma total configurada en categoryBudgets para las categorías evaluadas
-    let totalConfiguredCategoryBudget = 0;
+    // 1. Identificar categorías con presupuesto bloqueado manualmente
+    const validLockedCats = {};
+    let totalLockedCategoryBudget = 0;
+
     categories.forEach(cat => {
-      const val = categoryBudgets[cat];
-      if (val !== undefined && val !== null && !isNaN(val) && Number(val) > 0) {
-        totalConfiguredCategoryBudget += Number(val);
+      if (lockedCategoryBudgets && lockedCategoryBudgets[cat] !== undefined && lockedCategoryBudgets[cat] !== null) {
+        const rawLocked = Math.max(0, Number(lockedCategoryBudgets[cat]) || 0);
+        const roundedLocked = effectiveRoundingStep > 0
+          ? Math.floor(rawLocked / effectiveRoundingStep) * effectiveRoundingStep
+          : rawLocked;
+        validLockedCats[cat] = roundedLocked;
+        totalLockedCategoryBudget += roundedLocked;
       }
     });
 
-    const needsScaling = totalConfiguredCategoryBudget > 0 && Math.abs(totalConfiguredCategoryBudget - finalTargetBudget) > 1;
-    const catScaleFactor = needsScaling ? (finalTargetBudget / totalConfiguredCategoryBudget) : 1;
+    const hasLockedCats = Object.keys(validLockedCats).length > 0;
+    const unlockedCategories = categories.filter(cat => validLockedCats[cat] === undefined);
+    const freeBudgetForUnlocked = Math.max(0, finalTargetBudget - totalLockedCategoryBudget);
+
+    // Suma de categoryBudgets para las categorías no bloqueadas
+    let totalConfiguredUnlockedBudget = 0;
+    unlockedCategories.forEach(cat => {
+      const val = categoryBudgets[cat];
+      if (val !== undefined && val !== null && !isNaN(val) && Number(val) > 0) {
+        totalConfiguredUnlockedBudget += Number(val);
+      }
+    });
+
+    const catScaleFactor = (hasLockedCats)
+      ? (totalConfiguredUnlockedBudget > 0 ? (freeBudgetForUnlocked / totalConfiguredUnlockedBudget) : 1)
+      : (totalConfiguredUnlockedBudget > 0 && Math.abs(totalConfiguredUnlockedBudget - finalTargetBudget) > 1
+          ? (finalTargetBudget / totalConfiguredUnlockedBudget)
+          : 1);
 
     // Optimización particionada por categoría
     categories.forEach((cat) => {
@@ -131,11 +154,14 @@ export function optimizeBudget(items, options = {}) {
       const catCurrentBudget = catItems.reduce((acc, it) => acc + it.currentBudget, 0);
       
       let catTargetBudget;
-      if (categoryBudgets[cat] !== undefined && categoryBudgets[cat] !== null && !isNaN(categoryBudgets[cat])) {
+      if (validLockedCats[cat] !== undefined) {
+        // Categoría bloqueada manualmente: respeta su valor exacto sin reescalar
+        catTargetBudget = validLockedCats[cat];
+      } else if (categoryBudgets[cat] !== undefined && categoryBudgets[cat] !== null && !isNaN(categoryBudgets[cat])) {
         catTargetBudget = Number(categoryBudgets[cat]) * catScaleFactor;
       } else {
         const catRatio = totalCurrentBudget > 0 ? (catCurrentBudget / totalCurrentBudget) : (1 / categories.length);
-        catTargetBudget = finalTargetBudget * catRatio;
+        catTargetBudget = (hasLockedCats ? freeBudgetForUnlocked : finalTargetBudget) * catRatio;
       }
 
       if (effectiveRoundingStep > 0) {
@@ -161,27 +187,46 @@ export function optimizeBudget(items, options = {}) {
 
     if (effectiveRoundingStep > 0 && Math.abs(residualDiff) >= effectiveRoundingStep) {
       let steps = Math.floor(residualDiff / effectiveRoundingStep);
-      const unlockedSorted = [...optimized]
-        .filter(it => !it.isManualLocked)
+      
+      // Preferir tiendas no bloqueadas en categorías no bloqueadas
+      let unlockedSorted = [...optimized]
+        .filter(it => !it.isManualLocked && (!hasLockedCats || validLockedCats[it.category] === undefined))
         .sort((a, b) => b.adjustedIRC - a.adjustedIRC);
 
+      // Si todas las categorías o tiendas están bloqueadas, usar cualquier tienda no bloqueada
+      if (unlockedSorted.length === 0) {
+        unlockedSorted = [...optimized]
+          .filter(it => !it.isManualLocked)
+          .sort((a, b) => b.adjustedIRC - a.adjustedIRC);
+      }
+
       if (unlockedSorted.length > 0) {
-        let s = 0;
-        while (steps > 0 && s < unlockedSorted.length * 4) {
-          const it = unlockedSorted[s % unlockedSorted.length];
-          if (!it.isBelowThreshold || unlockedSorted.every(x => x.isBelowThreshold)) {
-            it.newBudget += effectiveRoundingStep;
-            steps--;
+        const hasEligible = unlockedSorted.some(x => !x.isBelowThreshold);
+        while (steps > 0) {
+          let anyAllocated = false;
+          for (let s = 0; s < unlockedSorted.length; s++) {
+            if (steps <= 0) break;
+            const it = unlockedSorted[s];
+            if (!it.isBelowThreshold || !hasEligible) {
+              it.newBudget += effectiveRoundingStep;
+              steps--;
+              anyAllocated = true;
+            }
           }
-          s++;
+          if (!anyAllocated) break;
         }
-        while (steps < 0 && s < unlockedSorted.length * 4) {
-          const it = unlockedSorted[unlockedSorted.length - 1 - (s % unlockedSorted.length)];
-          if (it.newBudget >= effectiveRoundingStep) {
-            it.newBudget -= effectiveRoundingStep;
-            steps++;
+        while (steps < 0) {
+          let anyReduced = false;
+          for (let s = unlockedSorted.length - 1; s >= 0; s--) {
+            if (steps >= 0) break;
+            const it = unlockedSorted[s];
+            if (it.newBudget >= effectiveRoundingStep) {
+              it.newBudget -= effectiveRoundingStep;
+              steps++;
+              anyReduced = true;
+            }
           }
-          s++;
+          if (!anyReduced) break;
         }
       }
     }
@@ -438,14 +483,19 @@ function allocateBudgetWithConstraints({
       .map((it, idx) => ({ idx, irc: it.adjustedIRC, isBelow: it.isBelowThreshold }))
       .sort((a, b) => b.irc - a.irc);
 
-    let loop = 0;
-    while (remainder >= roundingStep && loop < sortedIndices.length * 10) {
-      const targetIdx = sortedIndices[loop % sortedIndices.length].idx;
-      if (!unlockedItems[targetIdx].isBelowThreshold || sortedIndices.every(x => x.isBelow)) {
-        unlockedAllocations[targetIdx] += roundingStep;
-        remainder -= roundingStep;
+    const hasEligible = sortedIndices.some(x => !unlockedItems[x.idx].isBelowThreshold);
+    while (remainder >= roundingStep) {
+      let anyAllocated = false;
+      for (let s = 0; s < sortedIndices.length; s++) {
+        if (remainder < roundingStep) break;
+        const targetIdx = sortedIndices[s].idx;
+        if (!unlockedItems[targetIdx].isBelowThreshold || !hasEligible) {
+          unlockedAllocations[targetIdx] += roundingStep;
+          remainder -= roundingStep;
+          anyAllocated = true;
+        }
       }
-      loop++;
+      if (!anyAllocated) break;
     }
   } else {
     // Cuadre de centavos en la tienda de mejor rendimiento
@@ -499,6 +549,7 @@ export function planTwoPhaseRedistribution(items, options = {}) {
     alpha = 1.3,
     beta = 1.0, // Factor de sensibilidad al costo x mensaje (CPR)
     categoryBudgets = null,
+    lockedCategoryBudgets = {},
     manualOverrides = {}
   } = options;
 
@@ -523,12 +574,34 @@ export function planTwoPhaseRedistribution(items, options = {}) {
     ? Math.round(rawMondayTarget / effectiveRoundingStep) * effectiveRoundingStep
     : rawMondayTarget;
 
-  // Escalar los bloqueos manuales para el fin de semana proporcionalmente a la reducción
+  // Escalar los bloqueos manuales por tienda para el fin de semana proporcionalmente a la reducción
   const weekendManualOverrides = {};
   if (manualOverrides && Object.keys(manualOverrides).length > 0) {
     Object.keys(manualOverrides).forEach(id => {
       const val = Number(manualOverrides[id]) || 0;
       weekendManualOverrides[id] = effectiveRoundingStep > 0
+        ? Math.floor((val * (1 - Math.abs(reductionPct) / 100)) / effectiveRoundingStep) * effectiveRoundingStep
+        : Math.round(val * (1 - Math.abs(reductionPct) / 100));
+    });
+  }
+
+  // Escalar los bloqueos manuales por categoría para el fin de semana proporcionalmente a la reducción
+  const weekendLockedCategoryBudgets = {};
+  if (lockedCategoryBudgets && Object.keys(lockedCategoryBudgets).length > 0) {
+    Object.keys(lockedCategoryBudgets).forEach(cat => {
+      const val = Number(lockedCategoryBudgets[cat]) || 0;
+      weekendLockedCategoryBudgets[cat] = effectiveRoundingStep > 0
+        ? Math.floor((val * (1 - Math.abs(reductionPct) / 100)) / effectiveRoundingStep) * effectiveRoundingStep
+        : Math.round(val * (1 - Math.abs(reductionPct) / 100));
+    });
+  }
+
+  // Escalar los categoryBudgets para el fin de semana
+  const weekendCategoryBudgets = {};
+  if (categoryBudgets && Object.keys(categoryBudgets).length > 0) {
+    Object.keys(categoryBudgets).forEach(cat => {
+      const val = Number(categoryBudgets[cat]) || 0;
+      weekendCategoryBudgets[cat] = effectiveRoundingStep > 0
         ? Math.floor((val * (1 - Math.abs(reductionPct) / 100)) / effectiveRoundingStep) * effectiveRoundingStep
         : Math.round(val * (1 - Math.abs(reductionPct) / 100));
     });
@@ -542,7 +615,8 @@ export function planTwoPhaseRedistribution(items, options = {}) {
     maxVariationPct,
     alpha,
     beta,
-    categoryBudgets,
+    categoryBudgets: Object.keys(weekendCategoryBudgets).length > 0 ? weekendCategoryBudgets : null,
+    lockedCategoryBudgets: weekendLockedCategoryBudgets,
     manualOverrides: weekendManualOverrides
   });
 
@@ -555,6 +629,7 @@ export function planTwoPhaseRedistribution(items, options = {}) {
     alpha,
     beta,
     categoryBudgets,
+    lockedCategoryBudgets,
     manualOverrides
   });
 

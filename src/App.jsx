@@ -203,6 +203,7 @@ export default function App() {
     return optimizeBudget(filteredItems, {
       targetBudget: effectiveTargetBudget,
       categoryBudgets: isCategoryMode ? categoryBudgets : null,
+      lockedCategoryBudgets: isCategoryMode ? lockedCategoryBudgets : {},
       minEffectivenessThreshold,
       maxVariationPct,
       alpha,
@@ -210,7 +211,7 @@ export default function App() {
       roundingStep,
       manualOverrides
     });
-  }, [filteredItems, effectiveTargetBudget, isCategoryMode, categoryBudgets, minEffectivenessThreshold, maxVariationPct, alpha, beta, roundingStep, manualOverrides]);
+  }, [filteredItems, effectiveTargetBudget, isCategoryMode, categoryBudgets, lockedCategoryBudgets, minEffectivenessThreshold, maxVariationPct, alpha, beta, roundingStep, manualOverrides]);
 
   // Plan de Re-escalada en 2 fases si el modo está activo
   const reboundPlan = useMemo(() => {
@@ -225,9 +226,10 @@ export default function App() {
       alpha,
       beta,
       categoryBudgets: isCategoryMode ? categoryBudgets : null,
+      lockedCategoryBudgets: isCategoryMode ? lockedCategoryBudgets : {},
       manualOverrides
     });
-  }, [isReboundMode, filteredItems, effectiveTargetBudget, reboundReductionPct, reboundMondayBudget, roundingStep, minEffectivenessThreshold, maxVariationPct, alpha, beta, isCategoryMode, categoryBudgets, manualOverrides]);
+  }, [isReboundMode, filteredItems, effectiveTargetBudget, reboundReductionPct, reboundMondayBudget, roundingStep, minEffectivenessThreshold, maxVariationPct, alpha, beta, isCategoryMode, categoryBudgets, lockedCategoryBudgets, manualOverrides]);
 
   // Tiendas no filtradas: mantienen su presupuesto actual exactamente igual (0 variación)
   const untouchedItems = useMemo(() => {

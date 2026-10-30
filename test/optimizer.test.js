@@ -508,6 +508,69 @@ function runTests() {
     assert(s1.mondayBudget + s2.mondayBudget === 1000000, 'La suma total de Lunes con tiendas bloqueadas es exactamente $1,000,000');
   }
 
+  // Test 20: Bloqueo de Categoría (lockedCategoryBudgets) + Bloqueo de Tienda (manualOverrides)
+  {
+    const pivotStores = [
+      { id: 'c1', name: 'Camisetas A', category: 'CAMISETAS', currentBudget: 10000000, costPerMessage: 700, effectiveness: 12.0 },
+      { id: 'c2', name: 'Camisetas B', category: 'CAMISETAS', currentBudget: 8000000, costPerMessage: 800, effectiveness: 10.0 },
+      { id: 'j1', name: 'Conjuntos A', category: 'CONJUNTOS', currentBudget: 6000000, costPerMessage: 600, effectiveness: 14.0 },
+      { id: 'j2', name: 'Conjuntos B', category: 'CONJUNTOS', currentBudget: 4000000, costPerMessage: 650, effectiveness: 9.0 },
+      { id: 'p1', name: 'Pijamas A', category: 'PIJAMAS', currentBudget: 12000000, costPerMessage: 750, effectiveness: 11.0 }
+    ];
+    const totalTarget = 40000000;
+
+    // 1. Bloqueo de categoría CAMISETAS en $15,000,000 COP
+    // 2. Bloqueo de tienda c1 en $8,000,000 COP
+    // 3. Bloqueo de tienda j1 en $4,000,000 COP
+    const lockedCat = { 'CAMISETAS': 15000000 };
+    const manualLocks = { 'c1': 8000000, 'j1': 4000000 };
+
+    const catBudgets = {
+      'CAMISETAS': 15000000,
+      'CONJUNTOS': 10000000,
+      'PIJAMAS': 15000000
+    };
+
+    const optResult = optimizeBudget(pivotStores, {
+      targetBudget: totalTarget,
+      categoryBudgets: catBudgets,
+      lockedCategoryBudgets: lockedCat,
+      manualOverrides: manualLocks,
+      roundingStep: 1000
+    });
+
+    const camAllocated = optResult.optimizedItems.filter(it => it.category === 'CAMISETAS').reduce((acc, it) => acc + it.newBudget, 0);
+    const totalAllocated = optResult.optimizedItems.reduce((acc, it) => acc + it.newBudget, 0);
+    const c1Opt = optResult.optimizedItems.find(it => it.id === 'c1');
+    const c2Opt = optResult.optimizedItems.find(it => it.id === 'c2');
+    const j1Opt = optResult.optimizedItems.find(it => it.id === 'j1');
+
+    assert(camAllocated === 15000000, `Categoría bloqueada CAMISETAS asigna exactamente $15,000,000 (${camAllocated})`);
+    assert(c1Opt.newBudget === 8000000, `Tienda bloqueada c1 dentro de CAMISETAS recibe exactamente $8,000,000 (${c1Opt.newBudget})`);
+    assert(c1Opt.isManualLocked === true, 'c1 está marcada como isManualLocked');
+    assert(c2Opt.newBudget === 7000000, `Tienda hermana c2 recibe el remanente de la categoría ($7,000,000, actual: ${c2Opt.newBudget})`);
+    assert(j1Opt.newBudget === 4000000, `Tienda bloqueada j1 en CONJUNTOS recibe exactamente $4,000,000 (${j1Opt.newBudget})`);
+    assert(totalAllocated === totalTarget, `Suma total cuadra exactamente al target (${totalAllocated} === ${totalTarget})`);
+
+    // Probar Re-escalada en 2 fases con bloqueos combinados
+    const reboundResult = planTwoPhaseRedistribution(pivotStores, {
+      baseBudget: totalTarget,
+      reductionPct: 30,
+      reboundTargetBudget: totalTarget,
+      categoryBudgets: catBudgets,
+      lockedCategoryBudgets: lockedCat,
+      manualOverrides: manualLocks,
+      roundingStep: 1000
+    });
+
+    const c1Rebound = reboundResult.combinedItems.find(it => it.id === 'c1');
+    const j1Rebound = reboundResult.combinedItems.find(it => it.id === 'j1');
+    assert(c1Rebound.mondayBudget === 8000000, `Re-escalada Lunes c1 recibe $8,000,000 (${c1Rebound.mondayBudget})`);
+    assert(c1Rebound.weekendBudget === 5600000, `Re-escalada Finde c1 reduce -30% a $5,600,000 (${c1Rebound.weekendBudget})`);
+    assert(j1Rebound.mondayBudget === 4000000, `Re-escalada Lunes j1 recibe $4,000,000 (${j1Rebound.mondayBudget})`);
+    assert(j1Rebound.weekendBudget === 2800000, `Re-escalada Finde j1 reduce -30% a $2,800,000 (${j1Rebound.weekendBudget})`);
+  }
+
   console.log(`\nResultados: ${passed} pasadas, ${failed} fallidas`);
   if (failed > 0) process.exit(1);
 }
