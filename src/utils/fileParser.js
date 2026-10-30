@@ -264,6 +264,189 @@ export function aggregateRowsByStore(rawRows, colMap) {
 /**
  * Parsea un archivo de tipo CSV o texto delimitado
  */
+
+/**
+ * Detecta si un conjunto de filas corresponde a un reporte matricial / tabla dinámica
+ * (donde las tiendas están en columnas horizontales con métricas repetidas como Msg, Vent, Ef).
+ */
+export function isMatrixReport(rows) {
+  if (!rows || rows.length < 2) return false;
+
+  for (let r = 0; r < Math.min(4, rows.length); r++) {
+    const row = rows[r];
+    if (!row) continue;
+    let matchCount = 0;
+    for (let c = 0; c < row.length; c++) {
+      const val = String(row[c] || '').trim().toLowerCase();
+      if (/^(msg|mensajes?|vent|ventas?|cantadas?|ef\.?|efectividad)(\s*\(%\))?$/i.test(val)) {
+        matchCount++;
+      }
+    }
+    if (matchCount >= 6) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Parsea un reporte matricial donde las tiendas están ubicadas a lo largo de las columnas
+ * con métricas de Mensajes, Ventas/Cantadas y Efectividad %.
+ */
+export function parseMatrixReport(rows) {
+  if (!rows || rows.length < 2) {
+    return { parsedItems: [], detectedType: 'EFFECTIVENESS', columnsFound: [], headers: [] };
+  }
+
+  // 1. Identificar la fila que contiene las sub-métricas (Msg, Vent, Ef) y la de tiendas
+  let storeRowIdx = 0;
+  let metricRowIdx = 1;
+
+  for (let r = 0; r < Math.min(4, rows.length); r++) {
+    const row = rows[r];
+    if (!row) continue;
+    let metricCount = 0;
+    for (let c = 0; c < row.length; c++) {
+      const val = String(row[c] || '').trim().toLowerCase();
+      if (/^(msg|mensajes?|vent|ventas?|cantadas?|ef\.?|efectividad)(\s*\(%\))?$/i.test(val)) {
+        metricCount++;
+      }
+    }
+    if (metricCount >= 6) {
+      metricRowIdx = r;
+      storeRowIdx = Math.max(0, r - 1);
+      break;
+    }
+  }
+
+  const storeRow = rows[storeRowIdx] || [];
+  const metricRow = rows[metricRowIdx] || [];
+  const dataStartRow = metricRowIdx + 1;
+
+  // 2. Buscar la fila consolidada "Total General Hoy" o "Total Hoy"
+  let totalRow = null;
+  for (let r = dataStartRow; r < rows.length; r++) {
+    const firstCell = String(rows[r]?.[0] || '').trim().toLowerCase();
+    if (firstCell.includes('total general hoy') || firstCell === 'total hoy') {
+      totalRow = rows[r];
+      break;
+    }
+  }
+
+  // Si no se encuentra "Total General Hoy", buscar "Total General" (que no sea de ayer)
+  if (!totalRow) {
+    for (let r = dataStartRow; r < rows.length; r++) {
+      const firstCell = String(rows[r]?.[0] || '').trim().toLowerCase();
+      if (firstCell.includes('total general') && !firstCell.includes('ayer')) {
+        totalRow = rows[r];
+        break;
+      }
+    }
+  }
+
+  // 3. Extraer las tiendas recorriendo las columnas de la fila de encabezados
+  const parsedItems = [];
+  let itemIndex = 1;
+  const seenStores = new Set();
+
+  for (let c = 1; c < storeRow.length; c++) {
+    const rawHeader = String(storeRow[c] || '').trim();
+    if (!rawHeader || rawHeader.toLowerCase() === 'total general' || rawHeader.toLowerCase() === 'total') continue;
+
+    // Detectar columnas correspondientes a Msg, Vent, Ef
+    let colMsg = c;
+    let colVent = c + 1;
+    let colEf = c + 2;
+
+    const sub0 = String(metricRow[c] || '').trim().toLowerCase();
+    if (/vent|cantadas/i.test(sub0)) {
+      colVent = c;
+      colMsg = c - 1;
+    }
+
+    let msgs = 0;
+    let vent = 0;
+    let reportedEf = 0;
+
+    if (totalRow) {
+      msgs = cleanNumericValue(totalRow[colMsg]);
+      vent = cleanNumericValue(totalRow[colVent]);
+      reportedEf = cleanNumericValue(totalRow[colEf]);
+    } else {
+      // Sumar filas horarias si no existe fila consolidada
+      for (let r = dataStartRow; r < rows.length; r++) {
+        const rowLabel = String(rows[r]?.[0] || '').trim().toLowerCase();
+        if (rowLabel.startsWith('total') || rowLabel.startsWith('promedio')) continue;
+        msgs += cleanNumericValue(rows[r]?.[colMsg]);
+        vent += cleanNumericValue(rows[r]?.[colVent]);
+      }
+    }
+
+    // Normalizar nombre de tienda removiendo prefijo telefónico si está presente
+    const cleanName = rawHeader.replace(/^\+?\d{7,15}\s*([·\-\|:]\s*)?/, '').trim();
+    
+    // Buscar coincidencia en catálogo maestro
+    let catalogMatch = findInCatalog(cleanName);
+    if (!catalogMatch) {
+      catalogMatch = findInCatalog(cleanName.replace(/\s*\(\d+\)$/, '').trim());
+    }
+
+    const canonicalName = catalogMatch ? catalogMatch.name : cleanName;
+    const storeKey = canonicalName.toLowerCase();
+
+    if (seenStores.has(storeKey)) continue;
+    seenStores.add(storeKey);
+
+    // TRATAMIENTO DE ANOMALÍAS MATEMÁTICAS:
+    let finalMsgs = Math.round(msgs);
+    let finalVent = Math.round(vent);
+    let effectiveness = 0;
+
+    if (finalMsgs === 0 && finalVent > 0) {
+      // Anomalía: Ventas con 0 mensajes entrantes (ej. DISMERCA COLOMBIA 6 ventas)
+      // Se imputa 1 conversación por venta concretada para proteger la tienda y evitar división por cero
+      finalMsgs = finalVent;
+      effectiveness = 100.0;
+    } else if (finalMsgs > 0 && finalVent > finalMsgs) {
+      // Anomalía: Ventas > Mensajes (ej. STYLE TRENDS 1: 1 msg, 2 ventas -> 200%)
+      // Se limita la efectividad computable al 100% para evitar distorsiones por muestra pequeña
+      effectiveness = 100.0;
+    } else if (finalMsgs > 0) {
+      effectiveness = Number(((finalVent / finalMsgs) * 100).toFixed(2));
+    } else {
+      effectiveness = 0.0;
+    }
+
+    const item = {
+      id: `matrix-${itemIndex++}-${Math.random().toString(36).substr(2, 5)}`,
+      name: canonicalName,
+      rawName: rawHeader,
+      currentBudget: 0,
+      costPerMessage: 0,
+      effectiveness,
+      currentMessages: finalMsgs,
+      currentEffectiveMessages: finalVent,
+      cantadas: finalVent,
+      category: catalogMatch?.category || 'GENERAL',
+      product: catalogMatch?.product || 'GENERAL',
+      trafiker: catalogMatch?.trafiker || 'Sin asignar',
+      coordinator: catalogMatch?.coordinator || 'Sin asignar',
+      bpo: catalogMatch?.group || '',
+      status: catalogMatch?.status || 'ACTIVA',
+      isDynamic: !catalogMatch
+    };
+
+    parsedItems.push(enrichItemWithCatalog(item));
+  }
+
+  return {
+    parsedItems,
+    detectedType: 'EFFECTIVENESS',
+    columnsFound: ['name', 'messages', 'cantadas', 'effectiveness'],
+    headers: storeRow
+  };
+}
+
 export function parseDelimitedText(text) {
   if (!text || !text.trim()) return [];
 
@@ -287,6 +470,11 @@ export function parseDelimitedText(text) {
   // 2. Separar filas respetando comillas
   const rows = rawLines.map(line => parseDelimitedLine(line, bestDelimiter));
   if (rows.length < 2) return [];
+
+  // 2.1 Detectar si es un reporte matricial horizontal (pivot de tiendas en columnas)
+  if (isMatrixReport(rows)) {
+    return parseMatrixReport(rows);
+  }
 
   // Encabezados
   const headers = rows[0].map(h => String(h).trim());
@@ -328,6 +516,11 @@ export function parseExcelWorkbook(dataBuffer) {
   const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
   if (!rows || rows.length < 2) {
     return { parsedItems: [], detectedType: 'BOTH', columnsFound: [], headers: [] };
+  }
+
+  // Detectar si es un reporte matricial horizontal en Excel
+  if (isMatrixReport(rows)) {
+    return parseMatrixReport(rows);
   }
 
   // Buscar fila de encabezados (primera fila no vacía)
@@ -388,7 +581,7 @@ export async function parseUploadedTabularFile(file) {
 /**
  * Función auxiliar para parsear una línea CSV respetando comillas
  */
-function parseDelimitedLine(line, delimiter) {
+export function parseDelimitedLine(line, delimiter) {
   const values = [];
   let currentValue = '';
   let insideQuotes = false;

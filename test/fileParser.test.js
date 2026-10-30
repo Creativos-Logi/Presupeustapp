@@ -238,6 +238,73 @@ DRISTRI PRO 1,1400000,750`;
     assert(santaShop2W.isDynamic === true, 'SANTA SHOP 2 W está marcada como dinámica');
   }
 
+
+  // Test 11: Detección y parsing automático de reporte matricial horario (tblMatriz con 223 columnas y 73 tiendas)
+  {
+    const fixturePath = path.join(__dirname, 'fixtures', 'tblMatriz_sample.csv');
+    const csvContent = fs.readFileSync(fixturePath, 'utf-8');
+    const parsed = parseDelimitedText(csvContent);
+
+    assert(parsed.detectedType === 'EFFECTIVENESS', 'Reporte matricial se clasifica automáticamente como EFFECTIVENESS');
+    assert(parsed.parsedItems.length === 73, `Extrae exactamente 73 tiendas del reporte matricial (actual: ${parsed.parsedItems.length})`);
+
+    // Limpieza de prefijos telefónicos (ej: '3105219787 · OUTFIT FACTORY 3' -> 'OUTFIT FACTORY 3')
+    const outfit3 = parsed.parsedItems.find(it => it.name === 'OUTFIT FACTORY 3');
+    assert(outfit3 !== undefined, 'Encuentra OUTFIT FACTORY 3 con prefijo telefónico limpiado');
+    assert(outfit3.currentMessages === 129, `OUTFIT FACTORY 3 tiene 129 mensajes (actual: ${outfit3?.currentMessages})`);
+    assert(outfit3.cantadas === 6, `OUTFIT FACTORY 3 tiene 6 ventas cantadas (actual: ${outfit3?.cantadas})`);
+    assert(outfit3.effectiveness === 4.65, `OUTFIT FACTORY 3 tiene efectividad 4.65% (actual: ${outfit3?.effectiveness}%)`);
+    assert(outfit3.coordinator === 'ALEJANDRA', `OUTFIT FACTORY 3 se mapea a la coordinadora oficial ALEJANDRA (actual: ${outfit3?.coordinator})`);
+
+    // Control de anomalía: Ventas sin mensajes (ej: DISMERCA COLOMBIA con 0 msgs y 6 ventas)
+    const dismerca = parsed.parsedItems.find(it => it.name === 'DISMERCA COLOMBIA');
+    assert(dismerca !== undefined, 'Encuentra DISMERCA COLOMBIA');
+    assert(dismerca.cantadas === 6, 'DISMERCA COLOMBIA registra 6 cantadas');
+    assert(dismerca.currentMessages === 6, `DISMERCA COLOMBIA imputa mensajes = ventas (6) para evitar división por cero (actual: ${dismerca?.currentMessages})`);
+    assert(dismerca.effectiveness === 100.0, `DISMERCA COLOMBIA tiene efectividad 100.0% (actual: ${dismerca?.effectiveness}%)`);
+
+    // Control de anomalía: Outlier de efectividad > 100% (ej: STYLE TRENDS 1 con 1 msg y 2 ventas = 200%)
+    const styleTrends = parsed.parsedItems.find(it => it.name === 'STYLE TRENDS 1');
+    assert(styleTrends !== undefined, 'Encuentra STYLE TRENDS 1');
+    assert(styleTrends.cantadas === 2, 'STYLE TRENDS 1 registra 2 ventas');
+    assert(styleTrends.effectiveness === 100.0, `STYLE TRENDS 1 capa efectividad anormal a 100% (actual: ${styleTrends?.effectiveness}%)`);
+
+    // Tiendas dinámicas fuera del catálogo (debe detectar las 4 tiendas no listadas en los 79 iniciales)
+    const dynamicStores = parsed.parsedItems.filter(it => it.isDynamic);
+    assert(dynamicStores.length === 4, `Detecta exactamente 4 tiendas dinámicas fuera del catálogo (actual: ${dynamicStores.length})`);
+    assert(dynamicStores.some(it => it.name === 'LOOK CENTRAL 2'), 'LOOK CENTRAL 2 detectada como dinámica');
+    assert(dynamicStores.some(it => it.name === 'OUTFIT FACTORY'), 'OUTFIT FACTORY detectada como dinámica');
+    assert(dynamicStores.some(it => it.name === 'DANTE NOVA 4'), 'DANTE NOVA 4 detectada como dinámica');
+    assert(dynamicStores.some(it => it.name === 'AGORA SALON'), 'AGORA SALON detectada como dinámica');
+  }
+
+  // Test 12: Fusión de reporte matricial con portafolio inicial de catálogo oficial
+  {
+    const initialCatalog = getInitialCatalogPortfolio();
+    const fixturePath = path.join(__dirname, 'fixtures', 'tblMatriz_sample.csv');
+    const csvContent = fs.readFileSync(fixturePath, 'utf-8');
+    const parsed = parseDelimitedText(csvContent);
+
+    const mergedPortfolio = mergeExtractedMetrics(initialCatalog, parsed.parsedItems, 'EFFECTIVENESS');
+
+    // 79 del catálogo + 4 dinámicas = 83 tiendas únicas sin duplicados
+    assert(mergedPortfolio.length === 83, `Portafolio fusionado contiene exactamente 83 tiendas sin duplicados (actual: ${mergedPortfolio.length})`);
+
+    // Verificar que OUTFIT FACTORY 3 fusionó métricas y conservó cantadas
+    const outfitInMerged = mergedPortfolio.find(it => it.name === 'OUTFIT FACTORY 3');
+    assert(outfitInMerged !== undefined, 'OUTFIT FACTORY 3 existe en el portafolio fusionado');
+    assert(outfitInMerged.cantadas === 6, `OUTFIT FACTORY 3 conserva cantadas = 6 (actual: ${outfitInMerged?.cantadas})`);
+    assert(outfitInMerged.currentMessages === 129, `OUTFIT FACTORY 3 conserva currentMessages = 129 (actual: ${outfitInMerged?.currentMessages})`);
+    assert(outfitInMerged.effectiveness === 4.65, `OUTFIT FACTORY 3 conserva efectividad 4.65% (actual: ${outfitInMerged?.effectiveness}%)`);
+    assert(outfitInMerged.coordinator === 'ALEJANDRA', 'OUTFIT FACTORY 3 conserva su coordinadora oficial ALEJANDRA');
+
+    // Verificar que las 4 tiendas dinámicas fueron incorporadas con CPR en 0
+    const agoraSalon = mergedPortfolio.find(it => it.name === 'AGORA SALON');
+    assert(agoraSalon !== undefined, 'AGORA SALON se incorporó al portafolio');
+    assert(agoraSalon.isDynamic === true, 'AGORA SALON está marcada como dinámica');
+    assert(agoraSalon.costPerMessage === 0, 'AGORA SALON inicia con CPR en 0');
+    assert(agoraSalon.cantadas === 1, `AGORA SALON conserva su venta cantada (actual: ${agoraSalon?.cantadas})`);
+  }
   console.log(`\nResultados File Parser: ${passed} pasadas, ${failed} fallidas`);
   if (failed > 0) process.exit(1);
 }

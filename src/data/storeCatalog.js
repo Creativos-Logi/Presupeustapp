@@ -97,6 +97,7 @@ export const STORE_CATALOG = [
 function normalizeName(str) {
   if (!str) return '';
   return str
+    .replace(/^\+?\d{7,15}\s*([·\-\|:]\s*)?/, '')
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")

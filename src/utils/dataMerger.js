@@ -19,9 +19,10 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
     // Buscar si ya existe la tienda en la lista actual por ID o nombre
     const existingIndex = merged.findIndex(it => {
       if (it.id && newItem.id && it.id === newItem.id) return true;
-      // Normalizar nombres para coincidencia directa
-      const n1 = it.name.trim().toLowerCase();
-      const n2 = newItem.name.trim().toLowerCase();
+      // Normalizar nombres limpiando prefijos telefónicos si existen
+      const cleanPhone = (s) => String(s || '').replace(/^\+?\d{7,15}\s*([·\-\|:]\s*)?/, '').trim().toLowerCase();
+      const n1 = cleanPhone(it.name);
+      const n2 = cleanPhone(newItem.name);
       if (n1 === n2) return true;
       
       // Cruce mediante catálogo maestro de 79 tiendas
@@ -40,6 +41,7 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
       const hasNewBudget = typeof newItem.currentBudget === 'number' && !isNaN(newItem.currentBudget) && newItem.currentBudget >= 0;
       const hasNewEff = typeof newItem.effectiveness === 'number' && !isNaN(newItem.effectiveness) && newItem.effectiveness >= 0;
       const hasNewMsgs = typeof newItem.currentMessages === 'number' && !isNaN(newItem.currentMessages) && newItem.currentMessages >= 0;
+      const cantadas = typeof newItem.cantadas === 'number' ? newItem.cantadas : current.cantadas;
 
       // Metadatos de catálogo (producto, categoria, trafiker, coordinador)
       const category = newItem.category && newItem.category !== 'GENERAL' ? newItem.category : current.category;
@@ -59,8 +61,9 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
           currentBudget: budget,
           costPerMessage: cost,
           currentMessages: messages,
-          currentEffectiveMessages: Math.round(messages * (effectiveness / 100)),
+          currentEffectiveMessages: typeof cantadas === 'number' ? cantadas : Math.round(messages * (effectiveness / 100)),
           effectiveness,
+          cantadas,
           category,
           product,
           trafiker,
@@ -77,7 +80,8 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
           ...current,
           effectiveness,
           currentMessages: messages,
-          currentEffectiveMessages: Math.round(messages * ((effectiveness || 0) / 100)),
+          currentEffectiveMessages: typeof cantadas === 'number' ? cantadas : Math.round(messages * ((effectiveness || 0) / 100)),
+          cantadas,
           category,
           product,
           trafiker,
@@ -96,7 +100,8 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
           costPerMessage: cost,
           effectiveness,
           currentMessages: messages,
-          currentEffectiveMessages: Math.round(messages * ((effectiveness || 0) / 100)),
+          currentEffectiveMessages: typeof cantadas === 'number' ? cantadas : Math.round(messages * ((effectiveness || 0) / 100)),
+          cantadas,
           category,
           product,
           trafiker,
@@ -111,7 +116,8 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
         costPerMessage: newItem.costPerMessage !== undefined ? newItem.costPerMessage : 0,
         effectiveness: newItem.effectiveness !== undefined ? newItem.effectiveness : 0,
         currentMessages: newItem.currentMessages !== undefined ? newItem.currentMessages : 0,
-        currentEffectiveMessages: newItem.currentEffectiveMessages !== undefined ? newItem.currentEffectiveMessages : 0,
+        currentEffectiveMessages: newItem.cantadas !== undefined ? newItem.cantadas : (newItem.currentEffectiveMessages !== undefined ? newItem.currentEffectiveMessages : 0),
+        cantadas: newItem.cantadas,
         id: newItem.id || `item-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`
       });
     }
