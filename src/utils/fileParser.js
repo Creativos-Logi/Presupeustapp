@@ -266,6 +266,224 @@ export function aggregateRowsByStore(rawRows, colMap) {
  */
 
 /**
+ * Detecta si un conjunto de filas corresponde a un reporte semanal o multidía en formato tabla dinámica (pivot)
+ * donde la primera fila contiene fechas y "Total", la segunda fila métricas (Gasto, CPM, Mensajes, Cantadas, Efectividad),
+ * y la columna 0 contiene la jerarquía BPO > Categoría > Tienda.
+ */
+export function isWeeklyPivotReport(rows) {
+  if (!rows || rows.length < 3) return false;
+
+  // 1. Revisar si la fila 0 contiene fechas (DD/MM/YYYY) o "Total"
+  const row0 = rows[0] || [];
+  let dateCount = 0;
+  let hasTotal = false;
+  for (let c = 0; c < row0.length; c++) {
+    const val = String(row0[c] || '').trim();
+    if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(val)) dateCount++;
+    if (val.toLowerCase() === 'total') hasTotal = true;
+  }
+
+  // 2. Revisar si la fila 1 contiene columnas de métricas pivot (Gasto, CPM, CPA, Efectividad)
+  const row1 = rows[1] || [];
+  let pivotMetricCount = 0;
+  for (let c = 0; c < row1.length; c++) {
+    const val = String(row1[c] || '').trim().toLowerCase();
+    if (/^(gasto|cpm|cpa|mensajes?|cantadas?|cargadas?|efectividad)/i.test(val)) {
+      pivotMetricCount++;
+    }
+  }
+
+  const col0_0 = String(rows[0]?.[0] || '').trim().toLowerCase();
+  const col0_1 = String(rows[1]?.[0] || '').trim().toLowerCase();
+  const hasRowLabels = col0_0.includes('etiquetas de fila') || col0_1.includes('etiquetas de fila');
+
+  return (dateCount >= 1 && pivotMetricCount >= 4) || (hasRowLabels && pivotMetricCount >= 4) || (hasTotal && pivotMetricCount >= 4);
+}
+
+/**
+ * Parsea un reporte semanal o multidía en formato tabla dinámica (pivot)
+ * Extrayendo la jerarquía BPO > Categoría > Tienda y consolidando las métricas completas
+ * (Gasto, CPM/CPR, Mensajes, Cantadas, Efectividad %) desde el bloque Total o acumulando días.
+ */
+export function parseWeeklyPivotReport(rows) {
+  if (!rows || rows.length < 3) {
+    return { parsedItems: [], detectedType: 'BOTH', columnsFound: [], headers: [] };
+  }
+
+  const headerDatesRow = rows[0] || [];
+  const headerMetricsRow = rows[1] || [];
+  const dataStartRow = 2;
+
+  // 1. Ubicar el inicio del bloque "Total" en la fila 0
+  let totalColStart = -1;
+  for (let c = 0; c < headerDatesRow.length; c++) {
+    if (String(headerDatesRow[c] || '').trim().toLowerCase() === 'total') {
+      totalColStart = c;
+      break;
+    }
+  }
+
+  // 2. Mapear las columnas de métricas dentro del bloque Total
+  const totalCols = {};
+  if (totalColStart !== -1) {
+    for (let c = totalColStart; c < headerMetricsRow.length; c++) {
+      const h = String(headerMetricsRow[c] || '').trim().toLowerCase();
+      if (/^gasto|^presupuesto|^inversion|^spend/i.test(h) && totalCols.budget === undefined) totalCols.budget = c;
+      else if (/^cpm|^cpr|^costo.*(msg|mens|res)/i.test(h) && totalCols.costPerMessage === undefined) totalCols.costPerMessage = c;
+      else if (/^mensajes?|^msg|^resultados/i.test(h) && totalCols.messages === undefined) totalCols.messages = c;
+      else if (/^cantadas?|^ventas?|^pedidos/i.test(h) && totalCols.cantadas === undefined) totalCols.cantadas = c;
+      else if (/^efectividad|^conversion/i.test(h) && totalCols.effectiveness === undefined) totalCols.effectiveness = c;
+    }
+  }
+
+  // Fallback a posiciones estándar si alguna métrica no vino explícitamente etiquetada
+  if (totalColStart !== -1) {
+    if (totalCols.budget === undefined) totalCols.budget = totalColStart + 0;
+    if (totalCols.costPerMessage === undefined) totalCols.costPerMessage = totalColStart + 1;
+    if (totalCols.messages === undefined) totalCols.messages = totalColStart + 2;
+    if (totalCols.effectiveness === undefined) totalCols.effectiveness = totalColStart + 4;
+    if (totalCols.cantadas === undefined) totalCols.cantadas = totalColStart + 5;
+  }
+
+  let currentBpo = '';
+  let currentCategory = '';
+  const storeMap = new Map();
+  let itemIndex = 1;
+
+  for (let r = dataStartRow; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row || row.length === 0) continue;
+    const col0 = String(row[0] || '');
+    const trimmed = col0.trim();
+    if (!trimmed) continue;
+    if (trimmed.toLowerCase() === 'undefined' || trimmed.toLowerCase().startsWith('total general')) continue;
+
+    const spaces = (col0.match(/^(\s*)/) || [''])[0].length;
+    const isStore = spaces >= 3 || /\(\+?\d+\)/.test(col0) || (findInCatalog(trimmed) !== null);
+
+    if (!isStore) {
+      const upper = trimmed.toUpperCase();
+      if (spaces === 0 || ['BTK', 'ELT', 'BTK GR', 'E-HUK MEDELLIN', 'WAICHAT', '(SIN BPO)'].includes(upper)) {
+        currentBpo = trimmed;
+      } else {
+        currentCategory = trimmed;
+      }
+      continue;
+    }
+
+    // Tienda
+    const rawStoreName = trimmed;
+    const cleanName = rawStoreName.replace(/\s*\(\+?\d+\)\s*$/, '').trim();
+    const cleanWithoutPhone = cleanName.replace(/^\+?\d{7,15}\s*([·\-\|:]\s*)?/, '').trim();
+
+    // Cruce con catálogo maestro
+    const catalogMatch = findInCatalog(cleanWithoutPhone) || findInCatalog(cleanName) || findInCatalog(rawStoreName);
+    const canonicalName = catalogMatch ? catalogMatch.name : (cleanWithoutPhone || cleanName || rawStoreName);
+    const storeKey = canonicalName.toLowerCase();
+
+    // Extraer métricas
+    let budget = 0;
+    let rawCpm = 0;
+    let messages = 0;
+    let cantadas = 0;
+    let rawEff = 0;
+
+    if (totalColStart !== -1) {
+      budget = cleanNumericValue(row[totalCols.budget]);
+      rawCpm = cleanNumericValue(row[totalCols.costPerMessage]);
+      messages = Math.round(cleanNumericValue(row[totalCols.messages]));
+      cantadas = Math.round(cleanNumericValue(row[totalCols.cantadas]));
+      rawEff = cleanNumericValue(row[totalCols.effectiveness]);
+    } else {
+      // Si no hay bloque Total, sumar columnas de fechas individuales
+      for (let c = 1; c < row.length; c += 8) {
+        budget += cleanNumericValue(row[c]);
+        messages += Math.round(cleanNumericValue(row[c + 2]));
+        cantadas += Math.round(cleanNumericValue(row[c + 5]));
+      }
+    }
+
+    if (storeMap.has(storeKey)) {
+      // Consolidar entradas duplicadas (ej. campaña de pago + canal orgánico sin bpo)
+      const existing = storeMap.get(storeKey);
+      existing.currentBudget += budget;
+      existing.currentMessages += messages;
+      existing.cantadas += cantadas;
+      existing.currentEffectiveMessages = existing.cantadas;
+      if (existing.currentMessages > 0) {
+        existing.effectiveness = Number(((existing.cantadas / existing.currentMessages) * 100).toFixed(2));
+        existing.costPerMessage = Number((existing.currentBudget / existing.currentMessages).toFixed(2));
+      }
+      if (currentCategory && currentCategory !== '(Sin producto)' && existing.category === '(Sin producto)') {
+        existing.category = currentCategory;
+        existing.product = currentCategory;
+      }
+      if (currentBpo && currentBpo !== '(Sin BPO)' && existing.bpo === '(Sin BPO)') {
+        existing.bpo = currentBpo;
+      }
+    } else {
+      let effectiveness = 0;
+      if (messages === 0 && cantadas > 0) {
+        effectiveness = 100.0;
+      } else if (messages > 0 && cantadas > messages) {
+        effectiveness = 100.0;
+      } else if (messages > 0) {
+        effectiveness = Number(((cantadas / messages) * 100).toFixed(2));
+      } else {
+        effectiveness = rawEff;
+      }
+
+      let costPerMessage = 0;
+      if (rawCpm > 0) {
+        costPerMessage = Number(rawCpm.toFixed(2));
+      } else if (budget > 0 && messages > 0) {
+        costPerMessage = Number((budget / messages).toFixed(2));
+      }
+
+      const itemCategory = (catalogMatch?.category && catalogMatch.category !== 'GENERAL')
+        ? catalogMatch.category
+        : (currentCategory && currentCategory !== '(Sin producto)' ? currentCategory : 'GENERAL');
+
+      const itemProduct = (catalogMatch?.product && catalogMatch.product !== 'GENERAL')
+        ? catalogMatch.product
+        : (currentCategory && currentCategory !== '(Sin producto)' ? currentCategory : 'GENERAL');
+
+      const itemBpo = catalogMatch?.group || (currentBpo && currentBpo !== '(Sin BPO)' ? currentBpo : '');
+
+      const item = {
+        id: `pivot-${itemIndex++}-${Math.random().toString(36).substr(2, 5)}`,
+        name: canonicalName,
+        rawName: rawStoreName,
+        currentBudget: budget,
+        costPerMessage,
+        effectiveness,
+        currentMessages: messages,
+        currentEffectiveMessages: cantadas,
+        cantadas,
+        category: itemCategory,
+        product: itemProduct,
+        coordinator: catalogMatch?.coordinator || 'SIN ASIGNAR',
+        trafiker: catalogMatch?.trafiker || 'SIN ASIGNAR',
+        bpo: itemBpo,
+        status: catalogMatch?.status || 'ACTIVA',
+        isDynamic: !catalogMatch
+      };
+
+      storeMap.set(storeKey, enrichItemWithCatalog(item));
+    }
+  }
+
+  const parsedItems = Array.from(storeMap.values());
+
+  return {
+    parsedItems,
+    detectedType: 'BOTH',
+    columnsFound: ['name', 'budget', 'costPerMessage', 'messages', 'cantadas', 'effectiveness'],
+    headers: headerMetricsRow
+  };
+}
+
+/**
  * Detecta si un conjunto de filas corresponde a un reporte matricial / tabla dinámica
  * (donde las tiendas están en columnas horizontales con métricas repetidas como Msg, Vent, Ef).
  */
@@ -471,7 +689,12 @@ export function parseDelimitedText(text) {
   const rows = rawLines.map(line => parseDelimitedLine(line, bestDelimiter));
   if (rows.length < 2) return [];
 
-  // 2.1 Detectar si es un reporte matricial horizontal (pivot de tiendas en columnas)
+  // 2.1 Detectar si es un reporte pivot semanal/multidía (jerarquía BPO > Categoría > Tienda)
+  if (isWeeklyPivotReport(rows)) {
+    return parseWeeklyPivotReport(rows);
+  }
+
+  // 2.2 Detectar si es un reporte matricial horizontal (tiendas en columnas, horas en filas)
   if (isMatrixReport(rows)) {
     return parseMatrixReport(rows);
   }
@@ -516,6 +739,11 @@ export function parseExcelWorkbook(dataBuffer) {
   const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
   if (!rows || rows.length < 2) {
     return { parsedItems: [], detectedType: 'BOTH', columnsFound: [], headers: [] };
+  }
+
+  // Detectar si es un reporte pivot semanal/multidía en Excel
+  if (isWeeklyPivotReport(rows)) {
+    return parseWeeklyPivotReport(rows);
   }
 
   // Detectar si es un reporte matricial horizontal en Excel
@@ -592,13 +820,13 @@ export function parseDelimitedLine(line, delimiter) {
     if (char === '"') {
       insideQuotes = !insideQuotes;
     } else if (char === delimiter && !insideQuotes) {
-      values.push(currentValue.trim());
+      values.push(currentValue);
       currentValue = '';
     } else {
       currentValue += char;
     }
   }
 
-  values.push(currentValue.trim());
+  values.push(currentValue);
   return values;
 }

@@ -1,3 +1,4 @@
+import { optimizeBudget } from '../src/utils/optimizer.js';
 import * as XLSX from 'xlsx';
 import fs from 'fs';
 import path from 'path';
@@ -305,6 +306,88 @@ DRISTRI PRO 1,1400000,750`;
     assert(agoraSalon.costPerMessage === 0, 'AGORA SALON inicia con CPR en 0');
     assert(agoraSalon.cantadas === 1, `AGORA SALON conserva su venta cantada (actual: ${agoraSalon?.cantadas})`);
   }
+
+  // Test 13: Parsing de Reporte Semanal Pivot Maestro (7 días, 65 columnas, $81.2M COP)
+  {
+    const fixturePath = path.join(__dirname, 'fixtures', 'reporte_semana_pivot.csv');
+    const csvContent = fs.readFileSync(fixturePath, 'utf-8');
+    const parsed = parseDelimitedText(csvContent);
+
+    assert(parsed.detectedType === 'BOTH', 'Reporte semanal pivot se clasifica automáticamente como BOTH (trae gasto, costo y efectividad)');
+    assert(parsed.parsedItems.length === 88, `Extrae exactamente 88 tiendas únicas consolidadas (actual: ${parsed.parsedItems.length})`);
+
+    const totalGasto = parsed.parsedItems.reduce((acc, it) => acc + it.currentBudget, 0);
+    const totalMsgs = parsed.parsedItems.reduce((acc, it) => acc + it.currentMessages, 0);
+    const totalCantadas = parsed.parsedItems.reduce((acc, it) => acc + it.cantadas, 0);
+
+    assert(totalGasto === 81226188, `Gasto total consolidado cuadra exactamente ($81,226,188 COP, actual: ${totalGasto})`);
+    assert(totalMsgs === 106622, `Mensajes totales consolidados cuadran exactamente (106,622 msgs, actual: ${totalMsgs})`);
+    assert(totalCantadas === 8429, `Cantadas totales consolidadas cuadran exactamente (8,429 ventas, actual: ${totalCantadas})`);
+
+    // Limpieza de sufijos telefónicos en paréntesis: 'NET CAPITAL 3 (3117983168)' -> 'NET CAPITAL 3'
+    const netCapital3 = parsed.parsedItems.find(it => it.name === 'NET CAPITAL 3');
+    assert(netCapital3 !== undefined, 'Encuentra NET CAPITAL 3 con teléfono entre paréntesis limpiado');
+    assert(netCapital3.currentBudget === 1228916, `NET CAPITAL 3 tiene presupuesto $1,228,916 (actual: ${netCapital3?.currentBudget})`);
+    assert(netCapital3.costPerMessage === 617.24, `NET CAPITAL 3 tiene CPM $617.24 (actual: ${netCapital3?.costPerMessage})`);
+    assert(netCapital3.effectiveness === 10.75, `NET CAPITAL 3 tiene efectividad 10.75% (actual: ${netCapital3?.effectiveness}%)`);
+    assert(netCapital3.category === 'CAMISETAS', `NET CAPITAL 3 extrae categoría CAMISETAS del árbol (actual: ${netCapital3?.category})`);
+    assert(netCapital3.bpo === 'BTK', `NET CAPITAL 3 extrae BPO BTK del árbol (actual: ${netCapital3?.bpo})`);
+    assert(netCapital3.coordinator === 'ALEJANDRA', `NET CAPITAL 3 asocia coordinadora ALEJANDRA del catálogo (actual: ${netCapital3?.coordinator})`);
+  }
+
+  // Test 14: Parsing de Reporte Multidía Pivot (8 días, 73 columnas, $95.6M COP)
+  {
+    const fixturePath = path.join(__dirname, 'fixtures', 'reporte_8dias_pivot.csv');
+    const csvContent = fs.readFileSync(fixturePath, 'utf-8');
+    const parsed = parseDelimitedText(csvContent);
+
+    assert(parsed.detectedType === 'BOTH', 'Reporte multidía pivot se clasifica como BOTH');
+    assert(parsed.parsedItems.length === 89, `Extrae exactamente 89 tiendas únicas consolidadas (actual: ${parsed.parsedItems.length})`);
+
+    const totalGasto = parsed.parsedItems.reduce((acc, it) => acc + it.currentBudget, 0);
+    const totalMsgs = parsed.parsedItems.reduce((acc, it) => acc + it.currentMessages, 0);
+    const totalCantadas = parsed.parsedItems.reduce((acc, it) => acc + it.cantadas, 0);
+
+    assert(totalGasto === 95626552, `Gasto total de 8 días cuadra exactamente ($95,626,552 COP, actual: ${totalGasto})`);
+    assert(totalMsgs === 125471, `Mensajes de 8 días cuadran exactamente (125,471 msgs, actual: ${totalMsgs})`);
+    assert(totalCantadas === 9860, `Cantadas de 8 días cuadran exactamente (9,860 ventas, actual: ${totalCantadas})`);
+
+    // Consolidación de tiendas repetidas en campañas + orgánico (ej: Clothesnew)
+    const clothesnew = parsed.parsedItems.find(it => it.name.toLowerCase() === 'clothesnew');
+    assert(clothesnew !== undefined, 'Clothesnew consolidada correctamente');
+    assert(clothesnew.cantadas === 242, `Clothesnew suma ventas publicitarias y orgánicas (240 + 2 = 242, actual: ${clothesnew?.cantadas})`);
+  }
+
+  // Test 15: Optimización End-to-End sobre datos del reporte semanal pivot (subidas, bajadas y redondeo a miles)
+  {
+    const fixturePath = path.join(__dirname, 'fixtures', 'reporte_semana_pivot.csv');
+    const csvContent = fs.readFileSync(fixturePath, 'utf-8');
+    const parsed = parseDelimitedText(csvContent);
+
+    const optResult = optimizeBudget(parsed.parsedItems, {
+      roundingStep: 1000,
+      minEffectivenessThreshold: 8.0,
+      maxVariationPct: 50
+    });
+
+    const increases = optResult.optimizedItems.filter(it => it.status === 'INCREASE');
+    const decreases = optResult.optimizedItems.filter(it => it.status === 'DECREASE');
+    const blocked = optResult.optimizedItems.filter(it => it.status === 'BLOCKED_LOW_EFF');
+
+    assert(increases.length > 0, `Genera subidas automáticas para tiendas ganadoras (${increases.length} tiendas)`);
+    assert(decreases.length > 0, `Genera bajadas automáticas para tiendas con costo alto o rendimiento inferior (${decreases.length} tiendas)`);
+    assert(blocked.length > 0, `Protege tiendas por debajo del 8% de efectividad evitando aumentos (${blocked.length} tiendas)`);
+
+    // Verificar redondeo estricto a múltiplos de $1,000 sin decimales
+    const allCleanThousands = optResult.optimizedItems.every(it => it.newBudget % 1000 === 0 && Number.isInteger(it.newBudget));
+    assert(allCleanThousands, 'Todos los presupuestos asignados son múltiplos exactos de $1,000 COP sin centavos');
+
+    // Comprobar que NET CAPITAL 3 (alta efectividad 10.75% y bajo CPM $617) recibe inyección de presupuesto
+    const nc3Opt = optResult.optimizedItems.find(it => it.name === 'NET CAPITAL 3');
+    assert(nc3Opt.status === 'INCREASE', 'NET CAPITAL 3 es calificada con Inyectar Presupuesto (INCREASE)');
+    assert(nc3Opt.newBudget > nc3Opt.currentBudget, `NET CAPITAL 3 incrementa presupuesto (${nc3Opt.currentBudget} -> ${nc3Opt.newBudget})`);
+  }
+
   console.log(`\nResultados File Parser: ${passed} pasadas, ${failed} fallidas`);
   if (failed > 0) process.exit(1);
 }

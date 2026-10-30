@@ -20,7 +20,10 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
     const existingIndex = merged.findIndex(it => {
       if (it.id && newItem.id && it.id === newItem.id) return true;
       // Normalizar nombres limpiando prefijos telefónicos si existen
-      const cleanPhone = (s) => String(s || '').replace(/^\+?\d{7,15}\s*([·\-\|:]\s*)?/, '').trim().toLowerCase();
+      const cleanPhone = (s) => String(s || '')
+        .replace(/^\+?\d{7,15}\s*([·\-\|:]\s*)?/, '')
+        .replace(/\s*\(\+?\d+\)\s*$/, '')
+        .trim().toLowerCase();
       const n1 = cleanPhone(it.name);
       const n2 = cleanPhone(newItem.name);
       if (n1 === n2) return true;

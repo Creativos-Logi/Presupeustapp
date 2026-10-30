@@ -94,10 +94,11 @@ export const STORE_CATALOG = [
   { name: 'DISMERCA COLOMBIA', status: 'ACTIVA', group: 'E-HUK MEDELLIN', coordinator: 'WILL', campaign: 'EHUK HOGAR', product: 'OLLA+PARLANTE', category: 'HOGAR', trafiker: 'Oscar' }
 ];
 
-function normalizeName(str) {
+export function normalizeName(str) {
   if (!str) return '';
-  return str
+  return String(str)
     .replace(/^\+?\d{7,15}\s*([·\-\|:]\s*)?/, '')
+    .replace(/\s*\(\+?\d{7,15}\)\s*$/, '')
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -117,6 +118,19 @@ export function findInCatalog(storeName) {
   // 1. Concordancia exacta
   const exact = STORE_CATALOG.find(item => normalizeName(item.name) === cleanInput);
   if (exact) return exact;
+
+  // 1.1 Si tiene sufijo entre paréntesis con número/teléfono (ej: "NET CAPITAL 3 (3117983168)" o "TODO EN LINEA 1 (9919) (3117689919)")
+  const rawStr = String(storeName).trim();
+  const strippedSuffix = rawStr.replace(/\s*\(\+?\d+\)\s*$/, '').trim();
+  if (strippedSuffix && strippedSuffix !== rawStr) {
+    const strippedExact = STORE_CATALOG.find(item => normalizeName(item.name) === normalizeName(strippedSuffix));
+    if (strippedExact) return strippedExact;
+    const strippedClean = strippedSuffix.replace(/^\+?\d{7,15}\s*([·\-\|:]\s*)?/, '').trim();
+    if (strippedClean && strippedClean !== strippedSuffix) {
+      const coreExact = STORE_CATALOG.find(item => normalizeName(item.name) === normalizeName(strippedClean));
+      if (coreExact) return coreExact;
+    }
+  }
 
   const inputNums = cleanInput.match(/\d+/g)?.join('-') || '';
 
