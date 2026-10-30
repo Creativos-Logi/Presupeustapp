@@ -388,6 +388,39 @@ DRISTRI PRO 1,1400000,750`;
     assert(nc3Opt.newBudget > nc3Opt.currentBudget, `NET CAPITAL 3 incrementa presupuesto (${nc3Opt.currentBudget} -> ${nc3Opt.newBudget})`);
   }
 
+  // Test 16: Detección y parsing de Planilla Maestra de Presupuestos Diarios (Roster sin encabezados)
+  {
+    const userRosterText = `3117938167	DRISTRI PRO 1	DRISTRI PRO 1	ACTIVA	BTK	GOMEZ	BTK MAN	CAMISETAS	Oscar	1/9/2026		 $250.000
+3115231867	LATIN SHOP	LATIN SHOP	ACTIVA	BTK	GOMEZ	BTK MAN	CAMISETAS	Julio	1/9/2026		 $140.000
+3117983168	NET CAPITAL 3	NET CAPITAL 3	ACTIVA	BTK	ALEJANDRA	BTK MAN 1	CAMISETAS	Julio	5/10/2026		 $250.000`;
+
+    const parsed = parseDelimitedText(userRosterText);
+    assert(parsed.detectedType === 'COST', 'La planilla de presupuestos diarios se clasifica como COST');
+    assert(parsed.parsedItems.length === 3, `Extrae exactamente 3 tiendas de la planilla (actual: ${parsed.parsedItems.length})`);
+
+    const latin = parsed.parsedItems.find(it => it.name === 'LATIN SHOP');
+    assert(latin !== undefined, 'Encuentra LATIN SHOP en la planilla');
+    assert(latin.currentBudget === 140000, `LATIN SHOP tiene presupuesto diario $140,000 (actual: ${latin?.currentBudget})`);
+    assert(latin.dailyBudget === 140000, 'LATIN SHOP tiene dailyBudget $140,000');
+    assert(latin.trafiker === 'Julio', 'LATIN SHOP tiene trafiker Julio');
+    assert(latin.coordinator === 'GOMEZ', 'LATIN SHOP tiene coordinador GOMEZ');
+
+    const netCapital3 = parsed.parsedItems.find(it => it.name === 'NET CAPITAL 3');
+    assert(netCapital3.currentBudget === 250000, `NET CAPITAL 3 tiene presupuesto diario $250,000 (actual: ${netCapital3?.currentBudget})`);
+    assert(netCapital3.phone === '3117983168', 'NET CAPITAL 3 tiene teléfono extraído');
+
+    // Probar fusión con reporte de desempeño previo: el presupuesto diario actualiza el gasto acumulado
+    const existingPerformance = [
+      { id: '1', name: 'LATIN SHOP', currentBudget: 967372, costPerMessage: 802.13, effectiveness: 5.8, cantadas: 70, currentMessages: 1206 }
+    ];
+    const merged = mergeExtractedMetrics(existingPerformance, parsed.parsedItems, 'COST');
+    const mergedLatin = merged.find(it => it.name === 'LATIN SHOP');
+    assert(mergedLatin.currentBudget === 140000, `Fusión actualiza presupuesto a diario ($140,000, actual: ${mergedLatin.currentBudget})`);
+    assert(mergedLatin.costPerMessage === 802.13, 'Fusión preserva costo x mensaje ($802.13)');
+    assert(mergedLatin.effectiveness === 5.8, 'Fusión preserva efectividad (5.8%)');
+    assert(mergedLatin.cantadas === 70, 'Fusión preserva cantadas (70)');
+  }
+
   console.log(`\nResultados File Parser: ${passed} pasadas, ${failed} fallidas`);
   if (failed > 0) process.exit(1);
 }

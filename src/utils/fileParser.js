@@ -665,6 +665,138 @@ export function parseMatrixReport(rows) {
   };
 }
 
+/**
+ * Detecta si un conjunto de filas corresponde a una planilla maestra de tiendas o asignación de presupuestos diarios
+ * (ejemplo: Columna 0 teléfono, Columna 1 nombre de tienda, última columna con presupuesto diario como "$250.000",
+ * o filas sin encabezados donde se asocian tiendas y montos presupuestarios).
+ */
+export function isDailyBudgetRoster(rows) {
+  if (!rows || rows.length < 1) return false;
+
+  // Si tiene palabras clave de métricas operativas (mensajes, cantadas, cpm, costo por resultado), NO es planilla de presupuestos
+  const row0Str = (rows[0] || []).join(" ").toLowerCase();
+  if (/mensajes?|cantadas?|cpm|cpa|costo por|efectividad|conversiones/i.test(row0Str)) {
+    return false;
+  }
+
+  let matches = 0;
+  for (let r = 0; r < Math.min(10, rows.length); r++) {
+    const row = rows[r];
+    if (!row || row.length < 2) continue;
+
+    const col0Trimmed = String(row[0] || "").trim();
+    const isPhone = /^\+?3\d{9}$/.test(col0Trimmed);
+
+    const lastCell = String(row[row.length - 1] || "").trim();
+    const hasBudget = /\$?\s*\d{1,3}(\.\d{3})+/.test(lastCell) || 
+      (Number(lastCell.replace(/[^0-9]/g, "")) >= 10000 && Number(lastCell.replace(/[^0-9]/g, "")) <= 50000000);
+
+    if (isPhone && hasBudget) {
+      matches++;
+    }
+  }
+
+  return matches >= 1;
+}
+
+/**
+ * Parsea una planilla maestra o tabla pegada de tiendas y presupuestos diarios.
+ * Extrae: nombre de tienda, teléfono, presupuesto diario ($), categoría, coordinador, trafiker, y estado.
+ */
+export function parseDailyBudgetRoster(rows) {
+  const parsedItems = [];
+  let itemIdx = 1;
+
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row || row.length < 2) continue;
+
+    // Saltar fila de encabezado si existe
+    const rowStr = row.join(" ").toLowerCase();
+    if ((rowStr.includes("telefono") || rowStr.includes("phone")) && 
+        (rowStr.includes("tienda") || rowStr.includes("linea") || rowStr.includes("nombre")) && 
+        (rowStr.includes("presupuesto") || rowStr.includes("budget") || rowStr.includes("gasto"))) {
+      continue;
+    }
+
+    const col0 = String(row[0] || "").trim();
+    const isPhoneCol0 = /^\+?3\d{9}$/.test(col0);
+
+    let storeName = "";
+    let phone = "";
+    if (isPhoneCol0) {
+      phone = col0;
+      storeName = String(row[1] || "").trim();
+    } else {
+      // Buscar si alguna columna es el nombre de la tienda en el catálogo
+      for (let c = 0; c < Math.min(3, row.length); c++) {
+        const val = String(row[c] || "").trim();
+        if (findInCatalog(val)) {
+          storeName = val;
+          break;
+        }
+      }
+      if (!storeName) storeName = col0;
+    }
+
+    if (!storeName || /^(telefono|tienda|nombre|presupuesto)$/i.test(storeName)) continue;
+
+    // Buscar presupuesto diario desde la derecha
+    let dailyBudget = 0;
+    for (let c = row.length - 1; c >= 1; c--) {
+      const val = String(row[c] || "").trim();
+      if (val && (val.includes("$") || /\b\d{1,3}(\.\d{3})+\b/.test(val) || Number(val.replace(/[^0-9]/g, "")) >= 10000)) {
+        dailyBudget = cleanNumericValue(val);
+        break;
+      }
+    }
+
+    // Extraer metadatos
+    let coordinator = "";
+    let category = "";
+    let product = "";
+    let trafiker = "";
+    let group = "";
+    let status = "ACTIVA";
+
+    for (let c = 0; c < row.length; c++) {
+      const cell = String(row[c] || "").trim();
+      if (/^(ACTIVA|INACTIVA|PAUSADA)$/i.test(cell)) status = cell.toUpperCase();
+      if (/^(GOMEZ|ALEJANDRA|ANDREA|JORGE|ERIKA|PABLO|WILL)$/i.test(cell)) coordinator = cell.toUpperCase();
+      if (/^(Oscar|Julio)$/i.test(cell)) trafiker = cell;
+      if (/^(BTK|BTK GR|ELT|E-HUK MEDELLIN|WAICHAT)$/i.test(cell)) group = cell.toUpperCase();
+      if (/^(CAMISETAS|CONJUNTOS|CARPAS|BODY|SHORCITO|PIJAMAS|SMARTWATCH|BOXERS|LEGGINS|HOGAR)/i.test(cell)) {
+        category = cell.toUpperCase();
+        product = cell.toUpperCase();
+      }
+    }
+
+    const catalogMatch = findInCatalog(storeName) || (phone ? findInCatalog(phone) : null);
+
+    parsedItems.push(enrichItemWithCatalog({
+      id: "roster-" + (itemIdx++),
+      name: catalogMatch ? catalogMatch.name : storeName,
+      phone: phone || (catalogMatch ? catalogMatch.phone : ""),
+      currentBudget: dailyBudget,
+      dailyBudget,
+      category: category || (catalogMatch ? catalogMatch.category : "GENERAL"),
+      product: product || (catalogMatch ? catalogMatch.product : "GENERAL"),
+      coordinator: coordinator || (catalogMatch ? catalogMatch.coordinator : "SIN ASIGNAR"),
+      trafiker: trafiker || (catalogMatch ? catalogMatch.trafiker : "SIN ASIGNAR"),
+      group: group || (catalogMatch ? catalogMatch.group : "BTK"),
+      status: status || (catalogMatch ? catalogMatch.status : "ACTIVA"),
+      isDynamic: !catalogMatch
+    }));
+  }
+
+  return {
+    parsedItems,
+    detectedType: "COST",
+    columnsFound: ["name", "budget", "phone", "category", "coordinator", "trafiker"],
+    headers: []
+  };
+}
+
 export function parseDelimitedText(text) {
   if (!text || !text.trim()) return [];
 
@@ -697,6 +829,11 @@ export function parseDelimitedText(text) {
   // 2.2 Detectar si es un reporte matricial horizontal (tiendas en columnas, horas en filas)
   if (isMatrixReport(rows)) {
     return parseMatrixReport(rows);
+  }
+
+  // 2.3 Detectar si es una planilla maestra de tiendas con presupuestos diarios
+  if (isDailyBudgetRoster(rows)) {
+    return parseDailyBudgetRoster(rows);
   }
 
   // Encabezados
@@ -749,6 +886,11 @@ export function parseExcelWorkbook(dataBuffer) {
   // Detectar si es un reporte matricial horizontal en Excel
   if (isMatrixReport(rows)) {
     return parseMatrixReport(rows);
+  }
+
+  // Detectar si es una planilla maestra de tiendas con presupuestos diarios en Excel
+  if (isDailyBudgetRoster(rows)) {
+    return parseDailyBudgetRoster(rows);
   }
 
   // Buscar fila de encabezados (primera fila no vacía)

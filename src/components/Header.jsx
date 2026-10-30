@@ -1,7 +1,7 @@
 import React from 'react';
-import { Sparkles, TrendingUp, HelpCircle, RefreshCw, Database } from 'lucide-react';
+import { Sparkles, TrendingUp, HelpCircle, RefreshCw, Database, Zap } from 'lucide-react';
 
-export default function Header({ onReset, onLoadSample, onOpenHelp, onOpenCatalog }) {
+export default function Header({ onReset, onLoadSample, onOpenHelp, onOpenCatalog, onApplyDailyBudgets }) {
   return (
     <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-wrap items-center justify-between gap-4">
@@ -25,6 +25,17 @@ export default function Header({ onReset, onLoadSample, onOpenHelp, onOpenCatalo
         </div>
 
         <div className="flex items-center gap-2">
+          {onApplyDailyBudgets && (
+            <button
+              onClick={onApplyDailyBudgets}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-950/40 transition"
+              title="Calibrar todas las tiendas con sus presupuestos diarios oficiales de Meta Ads ($15,000,000 COP/día)"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-300" />
+              Presupuestos Diarios ($15M)
+            </button>
+          )}
+
           <button
             onClick={() => onLoadSample('realTracking')}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-950/40 transition"

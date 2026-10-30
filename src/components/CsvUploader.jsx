@@ -1,12 +1,12 @@
 import React, { useState, useRef } from 'react';
 import {
   FileSpreadsheet, FileText, UploadCloud, CheckCircle2,
-  AlertTriangle, RefreshCw, Layers, Database
+  AlertTriangle, RefreshCw, Layers, Database, Zap, ClipboardList
 } from 'lucide-react';
 import { mergeExtractedMetrics } from '../utils/dataMerger';
 import { parseUploadedTabularFile, parseDelimitedText } from '../utils/fileParser';
 
-export default function CsvUploader({ items, onDataExtracted, isLoading, setIsLoading }) {
+export default function CsvUploader({ items, onDataExtracted, isLoading, setIsLoading, onApplyDailyBudgets }) {
   const [dragOver, setDragOver] = useState(false);
   const [successNotice, setSuccessNotice] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
@@ -111,13 +111,25 @@ export default function CsvUploader({ items, onDataExtracted, isLoading, setIsLo
           </div>
         </div>
 
-        <button
-          onClick={() => setShowTextPaste(!showTextPaste)}
-          className="text-xs text-slate-400 hover:text-emerald-400 flex items-center gap-1 transition"
-        >
-          <FileText className="w-3.5 h-3.5" />
-          {showTextPaste ? 'Ocultar Texto' : 'Pegar texto CSV'}
-        </button>
+        <div className="flex items-center gap-2">
+          {onApplyDailyBudgets && (
+            <button
+              onClick={onApplyDailyBudgets}
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-900/60 transition flex items-center gap-1"
+              title="Calibrar tiendas con su presupuesto diario oficial ($15M/día)"
+            >
+              <Zap className="w-3 h-3 text-amber-300" />
+              Usar Diarios ($15M)
+            </button>
+          )}
+          <button
+            onClick={() => setShowTextPaste(!showTextPaste)}
+            className="text-xs text-slate-400 hover:text-emerald-400 flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-700 hover:border-slate-600 bg-slate-950/60 transition"
+          >
+            <ClipboardList className="w-3.5 h-3.5 text-pink-400" />
+            {showTextPaste ? 'Ocultar' : 'Pegar Presupuestos / CSV'}
+          </button>
+        </div>
       </div>
 
       {/* Alerta de Éxito */}
@@ -149,7 +161,7 @@ export default function CsvUploader({ items, onDataExtracted, isLoading, setIsLo
           <textarea
             value={rawText}
             onChange={(e) => setRawText(e.target.value)}
-            placeholder="fecha;hora;numero;linea;tienda;bpo;coordinador;producto;trafiker;estado;mensajes;cantadas&#10;2026-10-19;0;3002436644;OUTFIT FACTORY 2;ELT PIJAMAS;ELT;JORGE;PIJAMAS;Julio;ACTIVA;9;0"
+            placeholder="Pega aquí tu planilla de Excel/Sheets (ej: 3117983168	NET CAPITAL 3	... $250.000) o reporte CSV de tracking... Detecta tiendas y presupuestos automáticamente."
             className="w-full h-24 bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs font-mono text-slate-200 focus:outline-none focus:border-emerald-500 resize-none"
           />
           <div className="flex justify-end gap-2">

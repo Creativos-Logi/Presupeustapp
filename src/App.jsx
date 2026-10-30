@@ -314,6 +314,23 @@ export default function App() {
     setLockedCategoryBudgets({});
   };
 
+  // Calibrar el portafolio actual con los presupuestos diarios reales de Meta Ads
+  const handleApplyDailyBudgets = () => {
+    setItems(prev => prev.map(item => {
+      const match = findInCatalog(item.name) || (item.phone ? findInCatalog(item.phone) : null);
+      const daily = (item.dailyBudget > 0) ? item.dailyBudget : (match?.dailyBudget > 0 ? match.dailyBudget : item.currentBudget);
+      const cost = Number(item.costPerMessage) || 0;
+      return {
+        ...item,
+        currentBudget: daily,
+        dailyBudget: daily,
+        currentMessages: cost > 0 ? Math.round(daily / cost) : item.currentMessages
+      };
+    }));
+    setTargetBudget(null);
+    setPctDelta(0);
+  };
+
   // Handlers para bloqueo de presupuestos por tienda individual
   const handleSetManualBudget = (id, amount) => {
     setManualOverrides(prev => ({
@@ -394,6 +411,7 @@ export default function App() {
         onLoadSample={handleLoadSample}
         onOpenHelp={() => setIsHelpOpen(true)}
         onOpenCatalog={() => setIsCatalogOpen(true)}
+        onApplyDailyBudgets={handleApplyDailyBudgets}
       />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full space-y-6">
@@ -426,6 +444,7 @@ export default function App() {
               onDataExtracted={handleDataExtracted}
               isLoading={isLoadingFile}
               setIsLoading={setIsLoadingFile}
+              onApplyDailyBudgets={handleApplyDailyBudgets}
             />
           </div>
 
