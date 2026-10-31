@@ -217,10 +217,11 @@ export function optimizeBudget(items, options = {}) {
             }
           }
           if (!anyAllocated) {
-            for (let s = 0; s < unlockedSorted.length; s++) {
-              if (steps <= 0) break;
-              unlockedSorted[s].newBudget += effectiveRoundingStep;
+            let rr = 0;
+            while (steps > 0 && rr < 1000) {
+              unlockedSorted[rr % unlockedSorted.length].newBudget += effectiveRoundingStep;
               steps--;
+              rr++;
             }
             break;
           }
@@ -240,12 +241,14 @@ export function optimizeBudget(items, options = {}) {
             }
           }
           if (!anyReduced) {
-            for (let s = unlockedSorted.length - 1; s >= 0; s--) {
-              if (steps >= 0) break;
-              if (unlockedSorted[s].newBudget >= effectiveRoundingStep) {
-                unlockedSorted[s].newBudget -= effectiveRoundingStep;
+            let rr = 0;
+            while (steps < 0 && rr < 1000) {
+              const it = unlockedSorted[unlockedSorted.length - 1 - (rr % unlockedSorted.length)];
+              if (it.newBudget >= effectiveRoundingStep) {
+                it.newBudget -= effectiveRoundingStep;
                 steps++;
               }
+              rr++;
             }
             break;
           }
@@ -432,12 +435,22 @@ function allocateBudgetWithConstraints({
 
     if (maxVariationPct && maxVariationPct > 0 && item.currentBudget > 0) {
       const varFrac = maxVariationPct / 100;
-      minBound = Math.max(minLineBudget, item.currentBudget * (1 - varFrac));
+
+      // En bajada macro (target < current), minBound debe adaptarse para permitir reducciones como -40%
+      const macroScale = totalCurrentBudget > 0 ? (totalTargetBudget / totalCurrentBudget) : 1;
+      let effectiveLowerFrac = varFrac;
+      if (macroScale < (1 - varFrac)) {
+        effectiveLowerFrac = Math.max(varFrac, 1 - (macroScale * 0.95));
+      }
+      minBound = Math.max(minLineBudget, item.currentBudget * (1 - effectiveLowerFrac));
       
-      // La cota superior sólo se amplía si la meta MACRO general excede (1 + varFrac)
+      // La cota superior: se modula con la escala macro para que en recortes fuertes (ej. -30%) ninguna tienda crezca
       const nonProtectedCurrent = unlockedItems.filter(it => !it.isBelowThreshold).reduce((acc, it) => acc + it.currentBudget, 0);
       let allowedUpperFrac = varFrac;
-      if (totalTargetBudget > totalCurrentBudget && nonProtectedCurrent > 0) {
+      if (macroScale < 0.98) {
+        // En recortes macro significativos (bajada), limitamos el crecimiento según la escala macro
+        allowedUpperFrac = Math.max(0, (1 + varFrac) * macroScale - 1);
+      } else if (totalTargetBudget > totalCurrentBudget && nonProtectedCurrent > 0) {
         const requiredIncrease = totalTargetBudget - totalCurrentBudget;
         const requiredFracOnEligible = requiredIncrease / nonProtectedCurrent;
         allowedUpperFrac = Math.max(varFrac, requiredFracOnEligible);
@@ -530,12 +543,14 @@ function allocateBudgetWithConstraints({
       }
       if (!anyAllocated) {
         const eligibleCandidates = sortedIndices.filter(x => !unlockedItems[x.idx].isBelowThreshold);
-        const listToUse = (eligibleCandidates.length > 0) ? eligibleCandidates : sortedIndices;
-        for (let s = 0; s < listToUse.length; s++) {
-          if (remainder < roundingStep) break;
-          const targetIdx = listToUse[s].idx;
-          unlockedAllocations[targetIdx] += roundingStep;
-          remainder -= roundingStep;
+        if (eligibleCandidates.length > 0) {
+          let rr = 0;
+          while (remainder >= roundingStep && rr < 1000) {
+            const targetIdx = eligibleCandidates[rr % eligibleCandidates.length].idx;
+            unlockedAllocations[targetIdx] += roundingStep;
+            remainder -= roundingStep;
+            rr++;
+          }
         }
         break;
       }
