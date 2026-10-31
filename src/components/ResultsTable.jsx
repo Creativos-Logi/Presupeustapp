@@ -14,7 +14,11 @@ export default function ResultsTable({
   manualOverrides = {},
   onSetManualBudget = () => {},
   onClearManualBudget = () => {},
-  onClearAllManualBudgets = () => {}
+  onClearAllManualBudgets = () => {},
+  weekendManualOverrides = {},
+  onSetWeekendManualBudget = () => {},
+  onClearWeekendManualBudget = () => {},
+  onClearAllWeekendManualBudgets = () => {}
 }) {
   const [copied, setCopied] = useState(false);
   const [copiedMode, setCopiedMode] = useState('');
@@ -67,7 +71,7 @@ export default function ResultsTable({
   const reboundTotalDelta = reboundTotalMonday - reboundTotalWeekend;
 
   const activeItemsForLocks = isReboundMode ? reboundItemsToRender : itemsToRender;
-  const lockedItemsCount = activeItemsForLocks.filter(it => it.isManualLocked).length;
+  const lockedItemsCount = activeItemsForLocks.filter(it => it.isManualLocked || it.isWeekendManualLocked).length;
   const totalLockedBudget = isReboundMode
     ? activeItemsForLocks.filter(it => it.isManualLocked).reduce((acc, it) => acc + (it.mondayBudget || 0), 0)
     : activeItemsForLocks.filter(it => it.isManualLocked).reduce((acc, it) => acc + (it.newBudget || 0), 0);
@@ -83,16 +87,21 @@ export default function ResultsTable({
           <div className="flex items-center gap-2">
             <Lock className="w-4 h-4 text-amber-400 shrink-0" />
             <span>
-              <strong>{lockedItemsCount} {lockedItemsCount === 1 ? 'tienda tiene' : 'tiendas tienen'} presupuesto manual fijado</strong> (${totalLockedBudget.toLocaleString()} COP reservados).
-              El remanente (${remainingBudgetForUnlocked.toLocaleString()} COP) se redistribuyó automáticamente entre las demás tiendas sin exceder el presupuesto total.
+              <strong>{lockedItemsCount} {lockedItemsCount === 1 ? 'tienda tiene' : 'tiendas tienen'} presupuesto manual fijado</strong>.
+              El remanente (${remainingBudgetForUnlocked.toLocaleString()} COP) se redistribuye respetando el guardrail de ±35% sin exceder el presupuesto total.
             </span>
           </div>
-          <button
-            onClick={onClearAllManualBudgets}
-            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition flex items-center gap-1"
-          >
-            <Unlock className="w-3 h-3" /> Desbloquear todas
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                onClearAllManualBudgets();
+                onClearAllWeekendManualBudgets();
+              }}
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition flex items-center gap-1"
+            >
+              <Unlock className="w-3 h-3" /> Desbloquear todas
+            </button>
+          </div>
         </div>
       )}
 
@@ -217,7 +226,6 @@ export default function ResultsTable({
             </thead>
             <tbody className="divide-y divide-slate-800/60 font-mono">
               {reboundItemsToRender.map((item) => {
-                const isPositiveReactivation = item.reactivationDelta > 0;
                 return (
                   <tr key={item.id} className="hover:bg-slate-800/30 transition-colors">
                     {/* Tienda */}
@@ -253,12 +261,53 @@ export default function ResultsTable({
                       ${Number(item.costPerMessage || 0).toFixed(0)}
                     </td>
 
-                    {/* Presupuesto Finde */}
-                    <td className="py-2.5 px-3 text-right font-bold text-rose-300">
-                      ${item.weekendBudget.toLocaleString()}
-                      <span className="text-[10px] block opacity-75 font-normal text-rose-400">
-                        {item.weekendDeltaPct > 0 ? '+' : ''}{item.weekendDeltaPct}%
-                      </span>
+                    {/* Presupuesto Finde (Editable / Bloqueable) */}
+                    <td className="py-2 px-3 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <div className="flex flex-col items-end">
+                          <div className="flex items-center">
+                            <span className="text-slate-500 text-[11px] mr-1">$</span>
+                            <input
+                              type="number"
+                              step="5000"
+                              min="0"
+                              value={item.isWeekendManualLocked ? (item.weekendManualBudget !== undefined ? item.weekendManualBudget : item.weekendBudget) : item.weekendBudget}
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value);
+                                if (!isNaN(val) && val >= 0) {
+                                  onSetWeekendManualBudget(item.id, val);
+                                }
+                              }}
+                              className={`font-mono text-xs text-right py-0.5 px-1.5 rounded w-24 border focus:outline-none transition ${
+                                item.isWeekendManualLocked
+                                  ? 'bg-rose-950/70 border-rose-500/70 text-rose-300 font-bold focus:border-rose-400'
+                                  : 'bg-slate-950/60 border-slate-700 text-rose-300 font-bold focus:border-rose-400 hover:border-slate-600'
+                              }`}
+                              title={item.isWeekendManualLocked ? 'Presupuesto Finde fijado manualmente. Clic en candado para desbloquear.' : 'Presupuesto Finde proyectado. Modifícalo para fijarlo manualmente.'}
+                            />
+                          </div>
+                          <span className="text-[10px] opacity-75 font-normal text-rose-400 pr-1">
+                            {item.weekendDeltaPct > 0 ? '+' : ''}{item.weekendDeltaPct}%
+                          </span>
+                        </div>
+                        {item.isWeekendManualLocked ? (
+                          <button
+                            onClick={() => onClearWeekendManualBudget(item.id)}
+                            title="Desbloquear tienda (volver a optimización automática de Finde)"
+                            className="p-1 rounded bg-rose-950/80 border border-rose-600/70 text-rose-400 hover:bg-slate-800 hover:border-slate-700 hover:text-slate-300 transition"
+                          >
+                            <Lock className="w-3.5 h-3.5" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => onSetWeekendManualBudget(item.id, item.weekendBudget)}
+                            title="Bloquear este presupuesto para el Fin de Semana"
+                            className="opacity-30 hover:opacity-100 p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-rose-300 transition"
+                          >
+                            <Unlock className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </td>
 
                     {/* Presupuesto Lunes (Editable / Bloqueable) */}
@@ -268,7 +317,7 @@ export default function ResultsTable({
                           <span className="text-slate-500 text-[11px] mr-1">$</span>
                           <input
                             type="number"
-                            step="1000"
+                            step="5000"
                             min="0"
                             value={item.isManualLocked ? (item.manualBudget !== undefined ? item.manualBudget : item.mondayBudget) : item.mondayBudget}
                             onChange={(e) => {
@@ -305,15 +354,34 @@ export default function ResultsTable({
                       </div>
                     </td>
 
-                    {/* Salto de Reactivación (Lunes - Finde) */}
-                    <td className="py-2.5 px-3 text-right font-bold text-emerald-400">
-                      <span className="inline-flex items-center gap-0.5">
-                        {isPositiveReactivation ? <ArrowUpRight className="w-3.5 h-3.5 text-emerald-400" /> : null}
-                        +${item.reactivationDelta.toLocaleString()}
-                      </span>
-                      <span className="text-[10px] block text-emerald-400/80 font-normal">
-                        (+{item.reactivationDeltaPct}%)
-                      </span>
+                    {/* Salto de Reactivación (Lunes - Finde) con formato limpio */}
+                    <td className="py-2.5 px-3 text-right font-bold">
+                      {item.reactivationDelta > 0 ? (
+                        <>
+                          <span className="inline-flex items-center gap-0.5 text-emerald-400">
+                            <ArrowUpRight className="w-3.5 h-3.5 text-emerald-400" />
+                            +${item.reactivationDelta.toLocaleString()}
+                          </span>
+                          <span className="text-[10px] block text-emerald-400/80 font-normal">
+                            (+{item.reactivationDeltaPct}%)
+                          </span>
+                        </>
+                      ) : item.reactivationDelta < 0 ? (
+                        <>
+                          <span className="inline-flex items-center gap-0.5 text-rose-400">
+                            <ArrowDownRight className="w-3.5 h-3.5 text-rose-400" />
+                            -${Math.abs(item.reactivationDelta).toLocaleString()}
+                          </span>
+                          <span className="text-[10px] block text-rose-400/80 font-normal">
+                            (-{Math.abs(item.reactivationDeltaPct)}%)
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-slate-400">$0</span>
+                          <span className="text-[10px] block text-slate-500 font-normal">(0%)</span>
+                        </>
+                      )}
                     </td>
 
                     {/* Efectividad */}
@@ -340,7 +408,9 @@ export default function ResultsTable({
                 <td className="py-3 px-3 text-right text-sky-400">${summary?.newBlendedCPM || 0}</td>
                 <td className="py-3 px-3 text-right text-rose-400">${reboundTotalWeekend.toLocaleString()}</td>
                 <td className="py-3 px-3 text-right text-purple-300">${reboundTotalMonday.toLocaleString()}</td>
-                <td className="py-3 px-3 text-right text-emerald-400">+${reboundTotalDelta.toLocaleString()}</td>
+                <td className={`py-3 px-3 text-right font-mono ${reboundTotalDelta >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {reboundTotalDelta >= 0 ? `+$${reboundTotalDelta.toLocaleString()}` : `-$${Math.abs(reboundTotalDelta).toLocaleString()}`}
+                </td>
                 <td className="py-3 px-3 text-right text-purple-300">
                   {reboundPlan?.reboundSummary?.mondaySummary?.newWeightedEff || 0}% pond.
                 </td>
@@ -426,7 +496,7 @@ export default function ResultsTable({
                             <span className="text-slate-500 text-[11px] mr-1">$</span>
                             <input
                               type="number"
-                              step="1000"
+                              step="5000"
                               min="0"
                               value={item.isManualLocked ? (item.manualBudget !== undefined ? item.manualBudget : item.newBudget) : item.newBudget}
                               onChange={(e) => {

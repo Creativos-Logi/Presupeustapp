@@ -571,6 +571,154 @@ function runTests() {
     assert(j1Rebound.weekendBudget === 2800000, `Re-escalada Finde j1 reduce -30% a $2,800,000 (${j1Rebound.weekendBudget})`);
   }
 
+  // Test 21: Redondeo estricto a múltiplos de $5,000 COP con suma global idéntica al target
+  {
+    const items5k = [
+      { id: 't1', name: 'Tienda 1', currentBudget: 140000, costPerMessage: 650, effectiveness: 12.0 },
+      { id: 't2', name: 'Tienda 2', currentBudget: 270000, costPerMessage: 500, effectiveness: 15.0 },
+      { id: 't3', name: 'Tienda 3', currentBudget: 220000, costPerMessage: 800, effectiveness: 9.0 },
+      { id: 't4', name: 'Tienda 4', currentBudget: 170000, costPerMessage: 700, effectiveness: 10.0 }
+    ];
+    const totalTarget = 800000;
+
+    const res = optimizeBudget(items5k, {
+      targetBudget: totalTarget,
+      roundingStep: 5000,
+      maxVariationPct: 35
+    });
+
+    const allMultiples5k = res.optimizedItems.every(it => it.newBudget % 5000 === 0);
+    assert(allMultiples5k, 'Todos los presupuestos asignados son múltiplos exactos de $5,000 COP');
+
+    const sumAllocated = res.optimizedItems.reduce((acc, it) => acc + it.newBudget, 0);
+    assert(sumAllocated === totalTarget, `La suma asignada (${sumAllocated}) cuadra exactamente con el target (${totalTarget})`);
+  }
+
+  // Test 22: Hard Cap ±35% en optimización normal
+  {
+    const itemsCap = [
+      { id: 'h1', name: 'Super Tienda', currentBudget: 100000, costPerMessage: 300, effectiveness: 25.0 },
+      { id: 'h2', name: 'Tienda Regular', currentBudget: 200000, costPerMessage: 700, effectiveness: 10.0 },
+      { id: 'h3', name: 'Tienda Débil', currentBudget: 150000, costPerMessage: 900, effectiveness: 8.5 }
+    ];
+    const target = 450000; // Mismo presupuesto total
+
+    const res = optimizeBudget(itemsCap, {
+      targetBudget: target,
+      maxVariationPct: 35,
+      roundingStep: 5000
+    });
+
+    const h1 = res.optimizedItems.find(it => it.id === 'h1');
+    const h3 = res.optimizedItems.find(it => it.id === 'h3');
+
+    // h1 tiene rendimiento excelente pero jamás puede superar 100,000 * 1.35 = 135,000
+    assert(h1.newBudget <= 135000, `Super Tienda respeta Hard Cap superior de +35% (${h1.newBudget} <= 135,000)`);
+
+    // h3 no debe bajar más de 150,000 * 0.65 = 97,500
+    assert(h3.newBudget >= 95000, `Tienda Débil respeta Hard Cap inferior de -35% (${h3.newBudget} >= 95,000)`);
+  }
+
+  // Test 23: Hard Cap al bloquear tiendas (evitar desborde +60% en la tienda libre)
+  {
+    const stores7 = [
+      { id: 's1', name: 'Tienda 1', currentBudget: 250000, costPerMessage: 716, effectiveness: 10.0 },
+      { id: 's2', name: 'Tienda 2', currentBudget: 100000, costPerMessage: 625, effectiveness: 4.09 },
+      { id: 's3', name: 'Tienda 3', currentBudget: 170000, costPerMessage: 688, effectiveness: 5.65 },
+      { id: 's4', name: 'Tienda 4', currentBudget: 250000, costPerMessage: 642, effectiveness: 9.21 },
+      { id: 's5', name: 'Tienda 5', currentBudget: 170000, costPerMessage: 783, effectiveness: 5.84 },
+      { id: 's6', name: 'GOAL STORE 2', currentBudget: 140000, costPerMessage: 638, effectiveness: 6.4 },
+      { id: 's7', name: 'Tienda 7', currentBudget: 170000, costPerMessage: 542, effectiveness: 4.63 }
+    ];
+
+    // Bloquear 6 de las 7 tiendas para el fin de semana a valores normales
+    const weekendLocks = {
+      's1': 165000,
+      's2': 60000,
+      's3': 80000,
+      's4': 160000,
+      's5': 80000,
+      's7': 90000
+    };
+    // Suma de bloqueos = 635,000. Meta Finde = 875,000.
+    // Presupuesto restante = 240,000.
+    // Sin guardrail, GOAL STORE 2 (s6, base 140k) se inflaba a 240,000 (+71%!).
+    // Con guardrail ±35%, la cota teórica es 140,000 * 1.35 = 189,000.
+    const res = optimizeBudget(stores7, {
+      targetBudget: 875000,
+      manualOverrides: weekendLocks,
+      maxVariationPct: 35,
+      roundingStep: 5000
+    });
+
+    const s6 = res.optimizedItems.find(it => it.id === 's6');
+    assert(s6.newBudget <= 190000, `GOAL STORE 2 no se desborda a +60% o +71% y respeta cota de variación (${s6.newBudget} <= 190,000)`);
+  }
+
+  // Test 24: Bloqueo manual independiente de Fin de Semana (weekendManualOverrides)
+  {
+    const storesFinde = [
+      { id: 'f1', name: 'Tienda A', currentBudget: 200000, costPerMessage: 700, effectiveness: 12.0 },
+      { id: 'f2', name: 'Tienda B', currentBudget: 300000, costPerMessage: 600, effectiveness: 14.0 }
+    ];
+
+    const rebound = planTwoPhaseRedistribution(storesFinde, {
+      baseBudget: 500000,
+      reductionPct: 30, // Meta Finde = 350,000
+      roundingStep: 5000,
+      weekendManualOverrides: {
+        'f1': 120000 // Bloqueo explícito de fin de semana para Tienda A
+      }
+    });
+
+    const f1 = rebound.combinedItems.find(it => it.id === 'f1');
+    const f2 = rebound.combinedItems.find(it => it.id === 'f2');
+
+    assert(f1.weekendBudget === 120000, `Tienda A recibe exactamente su presupuesto de finde fijado ($120,000, actual: ${f1.weekendBudget})`);
+    assert(f1.isWeekendManualLocked === true, 'f1 está marcada como isWeekendManualLocked');
+    assert(f2.weekendBudget === 230000, `Tienda B recibe el remanente de finde ($230,000, actual: ${f2.weekendBudget})`);
+    assert(f1.weekendBudget + f2.weekendBudget === 350000, 'Suma de fin de semana cuadra exactamente a 350,000');
+  }
+
+  // Test 25: Bloqueo dual simultáneo (Finde y Lunes fijados por el usuario)
+  {
+    const storesDual = [
+      { id: 'd1', name: 'Tienda Dual', currentBudget: 200000, costPerMessage: 650, effectiveness: 11.0 },
+      { id: 'd2', name: 'Tienda Libre', currentBudget: 300000, costPerMessage: 600, effectiveness: 13.0 }
+    ];
+
+    const rebound = planTwoPhaseRedistribution(storesDual, {
+      baseBudget: 500000,
+      reductionPct: 30,
+      roundingStep: 5000,
+      weekendManualOverrides: { 'd1': 110000 },
+      manualOverrides: { 'd1': 190000 }
+    });
+
+    const d1 = rebound.combinedItems.find(it => it.id === 'd1');
+    assert(d1.weekendBudget === 110000, `d1 Finde fijado a 110,000 (actual: ${d1.weekendBudget})`);
+    assert(d1.mondayBudget === 190000, `d1 Lunes fijado a 190,000 (actual: ${d1.mondayBudget})`);
+    assert(d1.reactivationDelta === 80000, `Salto de reactivación es exactamente Lunes - Finde (80,000, actual: ${d1.reactivationDelta})`);
+    assert(d1.reactivationAction === 'Subir +$80.000', `Acción recomendada es Subir +$80.000 (actual: ${d1.reactivationAction})`);
+  }
+
+  // Test 26: Salto de reactivación negativo sin prefijo roto +$-
+  {
+    const storesNeg = [
+      { id: 'n1', name: 'Tienda Neg', currentBudget: 150000, costPerMessage: 600, effectiveness: 10.0 }
+    ];
+
+    const rebound = planTwoPhaseRedistribution(storesNeg, {
+      baseBudget: 150000,
+      weekendManualOverrides: { 'n1': 160000 },
+      manualOverrides: { 'n1': 100000 }
+    });
+
+    const n1 = rebound.combinedItems.find(it => it.id === 'n1');
+    assert(n1.reactivationDelta === -60000, `Delta negativo es exactamente -60,000 (actual: ${n1.reactivationDelta})`);
+    assert(n1.reactivationAction === 'Ajustar -$60.000', `Acción recomendada no tiene signos rotos: ${n1.reactivationAction}`);
+  }
+
   console.log(`\nResultados: ${passed} pasadas, ${failed} fallidas`);
   if (failed > 0) process.exit(1);
 }

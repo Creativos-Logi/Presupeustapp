@@ -57,7 +57,7 @@ export default function CategoryBudgetManager({
 
   const handlePercentageChange = (cat, pct) => {
     const fraction = Math.max(0, Math.min(100, parseFloat(pct) || 0)) / 100;
-    const amount = Math.floor((totalTargetBudget * fraction) / 1000) * 1000;
+    const amount = Math.floor((totalTargetBudget * fraction) / 5000) * 5000;
     if (onSetCategoryBudget) {
       onSetCategoryBudget(cat, amount);
     } else {
@@ -234,7 +234,7 @@ export default function CategoryBudgetManager({
                       <input
                         type="number"
                         min="0"
-                        step="1000"
+                        step="5000"
                         value={assignedAmount}
                         onChange={(e) => handleBudgetChange(cat, e.target.value)}
                         className={`w-full rounded-lg pl-7 pr-14 py-1.5 text-xs font-mono font-bold focus:outline-none transition border ${

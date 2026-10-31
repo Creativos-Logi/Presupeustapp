@@ -22,13 +22,14 @@ export default function App() {
   const [targetBudget, setTargetBudget] = useState(null);
   const [pctDelta, setPctDelta] = useState(0);
   const [minEffectivenessThreshold, setMinEffectivenessThreshold] = useState(8.0); // % corte
-  const [maxVariationPct, setMaxVariationPct] = useState(50); // +/- 50%
+  const [maxVariationPct, setMaxVariationPct] = useState(35); // +/- 35% guardrail estricto
   const [alpha, setAlpha] = useState(1.3); // Exponente efectividad
   const [beta, setBeta] = useState(1.0); // Factor de sensibilidad al costo x mensaje (CPR)
-  const [roundingStep, setRoundingStep] = useState(1000); // Redondeo por defecto a miles enteros ($1,000 COP)
+  const [roundingStep, setRoundingStep] = useState(5000); // Redondeo comercial a múltiplos de $5,000 COP
 
   // Bloqueo manual de presupuesto por tienda { [id]: number }
-  const [manualOverrides, setManualOverrides] = useState({});
+  const [manualOverrides, setManualOverrides] = useState({}); // Lunes / General
+  const [weekendManualOverrides, setWeekendManualOverrides] = useState({}); // Fin de Semana
 
   // Planificador de Re-escalada (Finde ➔ Lunes)
   const [isReboundMode, setIsReboundMode] = useState(false);
@@ -138,8 +139,9 @@ export default function App() {
     categories.forEach(cat => {
       if (lockedCategoryBudgets && lockedCategoryBudgets[cat] !== undefined) {
         const raw = Math.max(0, Number(lockedCategoryBudgets[cat]) || 0);
-        // Redondeo en miles limpios ($1,000 COP)
-        const rounded = Math.floor(raw / 1000) * 1000;
+        // Redondeo en múltiplos limpios de roundingStep ($5,000 COP)
+        const step = roundingStep > 0 ? roundingStep : 1000;
+        const rounded = Math.floor(raw / step) * step;
         validLocked[cat] = rounded;
         totalLockedAmount += rounded;
       }
@@ -169,13 +171,14 @@ export default function App() {
     });
     const totalWeight = weights.reduce((sum, w) => sum + w, 0) || 1;
 
-    // Asignación floor en miles limpios ($1,000 COP)
+    const step = roundingStep > 0 ? roundingStep : 1000;
+    // Asignación floor en múltiplos de roundingStep
     let unlockedAllocations = unlockedCategories.map((_, i) => {
       const rawAlloc = (weights[i] / totalWeight) * freeBudget;
-      return Math.floor(rawAlloc / 1000) * 1000;
+      return Math.floor(rawAlloc / step) * step;
     });
 
-    // Repartir residuo en pasos de $1,000 COP a las categorías de mayor peso
+    // Repartir residuo en pasos de roundingStep a las categorías de mayor peso
     let assignedUnlockedSum = unlockedAllocations.reduce((sum, val) => sum + val, 0);
     let remainder = freeBudget - assignedUnlockedSum;
 
@@ -184,10 +187,10 @@ export default function App() {
       .sort((a, b) => b.weight - a.weight);
 
     let loop = 0;
-    while (remainder >= 1000 && loop < sortedIndices.length * 10) {
+    while (remainder >= step && loop < sortedIndices.length * 10) {
       const targetIdx = sortedIndices[loop % sortedIndices.length].idx;
-      unlockedAllocations[targetIdx] += 1000;
-      remainder -= 1000;
+      unlockedAllocations[targetIdx] += step;
+      remainder -= step;
       loop++;
     }
 
@@ -196,7 +199,7 @@ export default function App() {
     });
 
     setCategoryBudgets(newCatBudgets);
-  }, [filteredItems, effectiveTargetBudget, categories.join(','), lockedCategoryBudgets]);
+  }, [filteredItems, effectiveTargetBudget, categories.join(','), lockedCategoryBudgets, roundingStep]);
 
   // Cálculo de optimización en tiempo real sobre las tiendas filtradas
   const { optimizedItems: rawOptimizedFiltered, summary: filteredSummary, categorySummaries } = useMemo(() => {
@@ -227,9 +230,10 @@ export default function App() {
       beta,
       categoryBudgets: isCategoryMode ? categoryBudgets : null,
       lockedCategoryBudgets: isCategoryMode ? lockedCategoryBudgets : {},
-      manualOverrides
+      manualOverrides,
+      weekendManualOverrides
     });
-  }, [isReboundMode, filteredItems, effectiveTargetBudget, reboundReductionPct, reboundMondayBudget, roundingStep, minEffectivenessThreshold, maxVariationPct, alpha, beta, isCategoryMode, categoryBudgets, lockedCategoryBudgets, manualOverrides]);
+  }, [isReboundMode, filteredItems, effectiveTargetBudget, reboundReductionPct, reboundMondayBudget, roundingStep, minEffectivenessThreshold, maxVariationPct, alpha, beta, isCategoryMode, categoryBudgets, lockedCategoryBudgets, manualOverrides, weekendManualOverrides]);
 
   // Tiendas no filtradas: mantienen su presupuesto actual exactamente igual (0 variación)
   const untouchedItems = useMemo(() => {
@@ -311,6 +315,7 @@ export default function App() {
     setTargetBudget(null);
     setPctDelta(0);
     setManualOverrides({});
+    setWeekendManualOverrides({});
     setLockedCategoryBudgets({});
   };
 
@@ -331,7 +336,7 @@ export default function App() {
     setPctDelta(0);
   };
 
-  // Handlers para bloqueo de presupuestos por tienda individual
+  // Handlers para bloqueo de presupuestos por tienda individual (Lunes)
   const handleSetManualBudget = (id, amount) => {
     setManualOverrides(prev => ({
       ...prev,
@@ -351,9 +356,30 @@ export default function App() {
     setManualOverrides({});
   };
 
+  // Handlers para bloqueo de presupuestos de Fin de Semana por tienda individual
+  const handleSetWeekendManualBudget = (id, amount) => {
+    setWeekendManualOverrides(prev => ({
+      ...prev,
+      [id]: Math.max(0, Number(amount) || 0)
+    }));
+  };
+
+  const handleClearWeekendManualBudget = (id) => {
+    setWeekendManualOverrides(prev => {
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+  };
+
+  const handleClearAllWeekendManualBudgets = () => {
+    setWeekendManualOverrides({});
+  };
+
   // Handlers para bloqueo de presupuestos por categoría
   const handleSetCategoryBudget = (cat, amount) => {
-    const cleanAmount = Math.max(0, Math.floor((Number(amount) || 0) / 1000) * 1000);
+    const step = roundingStep > 0 ? roundingStep : 5000;
+    const cleanAmount = Math.max(0, Math.floor((Number(amount) || 0) / step) * step);
     setLockedCategoryBudgets(prev => ({ ...prev, [cat]: cleanAmount }));
   };
 
@@ -374,6 +400,7 @@ export default function App() {
     setTargetBudget(null);
     setPctDelta(0);
     setManualOverrides({});
+    setWeekendManualOverrides({});
     setLockedCategoryBudgets({});
     handleResetFilters();
   };
@@ -384,6 +411,7 @@ export default function App() {
     setTargetBudget(null);
     setPctDelta(0);
     setManualOverrides({});
+    setWeekendManualOverrides({});
     setLockedCategoryBudgets({});
   };
 
@@ -537,6 +565,10 @@ export default function App() {
             onSetManualBudget={handleSetManualBudget}
             onClearManualBudget={handleClearManualBudget}
             onClearAllManualBudgets={handleClearAllManualBudgets}
+            weekendManualOverrides={weekendManualOverrides}
+            onSetWeekendManualBudget={handleSetWeekendManualBudget}
+            onClearWeekendManualBudget={handleClearWeekendManualBudget}
+            onClearAllWeekendManualBudgets={handleClearAllWeekendManualBudgets}
           />
         )}
       </main>
@@ -554,6 +586,7 @@ export default function App() {
           setTargetBudget(null);
           setPctDelta(0);
           setManualOverrides({});
+          setWeekendManualOverrides({});
           setLockedCategoryBudgets({});
         }}
       />

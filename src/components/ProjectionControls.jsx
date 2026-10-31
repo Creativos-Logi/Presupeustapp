@@ -127,7 +127,7 @@ export default function ProjectionControls({
         {/* Indicador de Redondeo a Miles Enteros ($1,000 COP) sin exceder el presupuesto */}
         <div className="flex items-center gap-1.5 text-[11px] bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 text-emerald-400 font-medium">
           <Sparkles className="w-3.5 h-3.5" />
-          <span>Redondeo a miles: <strong>$1,000 COP</strong> (sin pasarse del presupuesto)</span>
+          <span>Redondeo a múltiplos: <strong>$5,000 COP</strong> (sin pasarse del presupuesto)</span>
         </div>
       </div>
 
@@ -284,7 +284,7 @@ export default function ProjectionControls({
             <input
               type="number"
               min="0"
-              step="1000"
+              step="5000"
               value={targetBudget !== null && !isNaN(targetBudget) ? targetBudget : totalCurrentBudget}
               onChange={(e) => handleCustomBudgetChange(e.target.value)}
               className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2 text-sm text-emerald-400 font-mono font-bold focus:outline-none focus:border-emerald-500"

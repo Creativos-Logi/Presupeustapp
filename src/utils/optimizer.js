@@ -34,9 +34,9 @@ export function optimizeBudget(items, options = {}) {
     targetBudget = null,
     targetBudgetPctDelta = 0,
     minEffectivenessThreshold = 8.0, // %
-    maxVariationPct = 50, // +/- 50%
+    maxVariationPct = 35, // +/- 35%
     minLineBudget = 0,
-    roundingStep = 0,
+    roundingStep = 5000,
     alpha = 1.3, // Sensibilidad a la efectividad (mayor = premia más calidad)
     beta = 1.0,  // Sensibilidad al costo por mensaje
     categoryBudgets = null,
@@ -207,26 +207,48 @@ export function optimizeBudget(items, options = {}) {
           for (let s = 0; s < unlockedSorted.length; s++) {
             if (steps <= 0) break;
             const it = unlockedSorted[s];
-            if (!it.isBelowThreshold || !hasEligible) {
+            const maxAllowed = (maxVariationPct && it.currentBudget > 0)
+              ? it.currentBudget * (1 + maxVariationPct / 100)
+              : Infinity;
+            if ((!it.isBelowThreshold || !hasEligible) && (it.newBudget + effectiveRoundingStep <= maxAllowed)) {
               it.newBudget += effectiveRoundingStep;
               steps--;
               anyAllocated = true;
             }
           }
-          if (!anyAllocated) break;
+          if (!anyAllocated) {
+            for (let s = 0; s < unlockedSorted.length; s++) {
+              if (steps <= 0) break;
+              unlockedSorted[s].newBudget += effectiveRoundingStep;
+              steps--;
+            }
+            break;
+          }
         }
         while (steps < 0) {
           let anyReduced = false;
           for (let s = unlockedSorted.length - 1; s >= 0; s--) {
             if (steps >= 0) break;
             const it = unlockedSorted[s];
-            if (it.newBudget >= effectiveRoundingStep) {
+            const minAllowed = (maxVariationPct && it.currentBudget > 0)
+              ? Math.max(minLineBudget, it.currentBudget * (1 - maxVariationPct / 100))
+              : minLineBudget;
+            if (it.newBudget - effectiveRoundingStep >= minAllowed && it.newBudget >= effectiveRoundingStep) {
               it.newBudget -= effectiveRoundingStep;
               steps++;
               anyReduced = true;
             }
           }
-          if (!anyReduced) break;
+          if (!anyReduced) {
+            for (let s = unlockedSorted.length - 1; s >= 0; s--) {
+              if (steps >= 0) break;
+              if (unlockedSorted[s].newBudget >= effectiveRoundingStep) {
+                unlockedSorted[s].newBudget -= effectiveRoundingStep;
+                steps++;
+              }
+            }
+            break;
+          }
         }
       }
     }
@@ -402,9 +424,8 @@ function allocateBudgetWithConstraints({
 
   // Factor de escala para unlockedItems
   const unlockedCurrentBudget = unlockedItems.reduce((acc, it) => acc + it.currentBudget, 0);
-  const globalScale = unlockedCurrentBudget > 0 ? (freeBudget / unlockedCurrentBudget) : 1;
 
-  // Cotas para unlocked items
+  // Cotas para unlocked items con Guardrail Estricto (Hard Cap)
   const bounds = unlockedItems.map(item => {
     let minBound = Math.min(item.currentBudget, minLineBudget);
     let maxBound = item.currentBudget;
@@ -412,7 +433,16 @@ function allocateBudgetWithConstraints({
     if (maxVariationPct && maxVariationPct > 0 && item.currentBudget > 0) {
       const varFrac = maxVariationPct / 100;
       minBound = Math.max(minLineBudget, item.currentBudget * (1 - varFrac));
-      maxBound = item.currentBudget * (1 + varFrac * Math.max(1, globalScale));
+      
+      // La cota superior sólo se amplía si la meta MACRO general excede (1 + varFrac)
+      const nonProtectedCurrent = unlockedItems.filter(it => !it.isBelowThreshold).reduce((acc, it) => acc + it.currentBudget, 0);
+      let allowedUpperFrac = varFrac;
+      if (totalTargetBudget > totalCurrentBudget && nonProtectedCurrent > 0) {
+        const requiredIncrease = totalTargetBudget - totalCurrentBudget;
+        const requiredFracOnEligible = requiredIncrease / nonProtectedCurrent;
+        allowedUpperFrac = Math.max(varFrac, requiredFracOnEligible);
+      }
+      maxBound = item.currentBudget * (1 + allowedUpperFrac);
     } else {
       minBound = minLineBudget;
       maxBound = freeBudget;
@@ -489,13 +519,26 @@ function allocateBudgetWithConstraints({
       for (let s = 0; s < sortedIndices.length; s++) {
         if (remainder < roundingStep) break;
         const targetIdx = sortedIndices[s].idx;
-        if (!unlockedItems[targetIdx].isBelowThreshold || !hasEligible) {
-          unlockedAllocations[targetIdx] += roundingStep;
-          remainder -= roundingStep;
-          anyAllocated = true;
+        const candidate = unlockedAllocations[targetIdx] + roundingStep;
+        if (candidate <= bounds[targetIdx].maxBound) {
+          if (!unlockedItems[targetIdx].isBelowThreshold || !hasEligible) {
+            unlockedAllocations[targetIdx] = candidate;
+            remainder -= roundingStep;
+            anyAllocated = true;
+          }
         }
       }
-      if (!anyAllocated) break;
+      if (!anyAllocated) {
+        const eligibleCandidates = sortedIndices.filter(x => !unlockedItems[x.idx].isBelowThreshold);
+        const listToUse = (eligibleCandidates.length > 0) ? eligibleCandidates : sortedIndices;
+        for (let s = 0; s < listToUse.length; s++) {
+          if (remainder < roundingStep) break;
+          const targetIdx = listToUse[s].idx;
+          unlockedAllocations[targetIdx] += roundingStep;
+          remainder -= roundingStep;
+        }
+        break;
+      }
     }
   } else {
     // Cuadre de centavos en la tienda de mejor rendimiento
@@ -545,12 +588,13 @@ export function planTwoPhaseRedistribution(items, options = {}) {
     reboundTargetBudget = null, // Presupuesto objetivo para el lunes
     roundingStep = 5000,
     minEffectivenessThreshold = 8.0,
-    maxVariationPct = 50,
+    maxVariationPct = 35,
     alpha = 1.3,
     beta = 1.0, // Factor de sensibilidad al costo x mensaje (CPR)
     categoryBudgets = null,
     lockedCategoryBudgets = {},
-    manualOverrides = {}
+    manualOverrides = {},
+    weekendManualOverrides = {}
   } = options;
 
   const totalCurrentBudget = items.reduce((acc, it) => acc + (Number(it.currentBudget) || 0), 0);
@@ -574,14 +618,26 @@ export function planTwoPhaseRedistribution(items, options = {}) {
     ? Math.round(rawMondayTarget / effectiveRoundingStep) * effectiveRoundingStep
     : rawMondayTarget;
 
-  // Escalar los bloqueos manuales por tienda para el fin de semana proporcionalmente a la reducción
-  const weekendManualOverrides = {};
+  // Resolver bloqueos manuales de fin de semana:
+  // 1. Si la tienda tiene bloqueo explícito en weekendManualOverrides, se respeta ese valor
+  // 2. Si tiene bloqueo en manualOverrides (Lunes) pero NO en finde, se escala proporcionalmente a la reducción
+  const resolvedWeekendManualOverrides = {};
+  if (weekendManualOverrides && Object.keys(weekendManualOverrides).length > 0) {
+    Object.keys(weekendManualOverrides).forEach(id => {
+      const val = Number(weekendManualOverrides[id]) || 0;
+      resolvedWeekendManualOverrides[id] = effectiveRoundingStep > 0
+        ? Math.floor(val / effectiveRoundingStep) * effectiveRoundingStep
+        : Math.round(val);
+    });
+  }
   if (manualOverrides && Object.keys(manualOverrides).length > 0) {
     Object.keys(manualOverrides).forEach(id => {
-      const val = Number(manualOverrides[id]) || 0;
-      weekendManualOverrides[id] = effectiveRoundingStep > 0
-        ? Math.floor((val * (1 - Math.abs(reductionPct) / 100)) / effectiveRoundingStep) * effectiveRoundingStep
-        : Math.round(val * (1 - Math.abs(reductionPct) / 100));
+      if (resolvedWeekendManualOverrides[id] === undefined) {
+        const val = Number(manualOverrides[id]) || 0;
+        resolvedWeekendManualOverrides[id] = effectiveRoundingStep > 0
+          ? Math.floor((val * (1 - Math.abs(reductionPct) / 100)) / effectiveRoundingStep) * effectiveRoundingStep
+          : Math.round(val * (1 - Math.abs(reductionPct) / 100));
+      }
     });
   }
 
@@ -617,7 +673,7 @@ export function planTwoPhaseRedistribution(items, options = {}) {
     beta,
     categoryBudgets: Object.keys(weekendCategoryBudgets).length > 0 ? weekendCategoryBudgets : null,
     lockedCategoryBudgets: weekendLockedCategoryBudgets,
-    manualOverrides: weekendManualOverrides
+    manualOverrides: resolvedWeekendManualOverrides
   });
 
   // Optimización Fase 2: Lunes
@@ -691,7 +747,9 @@ export function planTwoPhaseRedistribution(items, options = {}) {
       reactivationColor,
       isBelowThreshold: w.isBelowThreshold,
       isManualLocked: m.isManualLocked,
-      manualBudget: m.manualBudget
+      manualBudget: m.manualBudget,
+      isWeekendManualLocked: Boolean(w.isManualLocked),
+      weekendManualBudget: w.manualBudget
     };
   });
 
