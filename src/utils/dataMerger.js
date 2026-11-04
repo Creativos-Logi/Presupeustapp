@@ -3,6 +3,7 @@ import { findInCatalog, enrichItemWithCatalog } from '../data/storeCatalog.js';
 /**
  * Fusiona de manera inteligente los datos extraídos de un archivo subido (Excel, CSV o Captura)
  * PRIORIZANDO SIEMPRE los datos recién cargados sobre los datos que ya estaban guardados.
+ * Soporta concordancia por ID, Nombre limpio y Número Telefónico de 10 dígitos.
  * 
  * @param {Array} existingItems - Lista actual de tiendas guardadas en la app
  * @param {Array} newItems - Nuevos ítems extraídos del archivo recién subido
@@ -15,29 +16,48 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
 
   const merged = [...existingItems];
 
+  const extractPhoneDigits = (str) => {
+    const d = String(str || '').replace(/[^0-9]/g, '');
+    return d.length >= 10 ? d.slice(-10) : '';
+  };
+
+  const isPureDigits = (s) => /^\+?[\d\s\-\.\(\)]+$/.test(String(s || '').trim());
+
   newItems.forEach(newItem => {
-    // Buscar si ya existe la tienda en la lista actual por ID o nombre
+    // Buscar si ya existe la tienda en la lista actual por ID, Nombre o Teléfono
     const existingIndex = merged.findIndex(it => {
       if (it.id && newItem.id && it.id === newItem.id) return true;
-      // Normalizar nombres limpiando prefijos telefónicos si existen
+
+      // 1. Normalizar nombres limpiando prefijos/sufijos telefónicos si existen
       const cleanPhone = (s) => String(s || '')
         .replace(/^\+?\d{7,15}\s*([·\-\|:]\s*)?/, '')
         .replace(/\s*\(\+?\d+\)\s*$/, '')
         .trim().toLowerCase();
       const n1 = cleanPhone(it.name);
       const n2 = cleanPhone(newItem.name);
-      if (n1 === n2) return true;
+      if (n1 && n2 && n1 === n2) return true;
       
-      // Cruce mediante catálogo maestro de 79 tiendas
-      const m1 = findInCatalog(it.name);
-      const m2 = findInCatalog(newItem.name);
+      // 2. Cruce mediante catálogo maestro de 79 tiendas (por nombre o teléfono)
+      const m1 = findInCatalog(it.name) || (it.phone ? findInCatalog(it.phone) : null);
+      const m2 = findInCatalog(newItem.name) || (newItem.phone ? findInCatalog(newItem.phone) : null);
       if (m1 && m2 && m1.name === m2.name) return true;
+
+      // 3. Cruce directo por número telefónico (ej: en CSV venía solo el teléfono y en texto viene 'PEPE 3' con teléfono)
+      const p1 = extractPhoneDigits(it.phone) || extractPhoneDigits(it.name);
+      const p2 = extractPhoneDigits(newItem.phone) || extractPhoneDigits(newItem.name);
+      if (p1 && p2 && p1 === p2) return true;
 
       return false;
     });
 
     if (existingIndex !== -1) {
       const current = merged[existingIndex];
+
+      // Si la tienda previa tenía solo el número de teléfono como nombre y el nuevo ítem trae un nombre real legible, adoptarlo
+      const resolvedName = (isPureDigits(current.name) && newItem.name && !isPureDigits(newItem.name))
+        ? newItem.name
+        : current.name;
+      const resolvedPhone = current.phone || newItem.phone || '';
 
       // Verificamos qué valores vienen explícitamente en el archivo subido
       const hasNewCost = typeof newItem.costPerMessage === 'number' && !isNaN(newItem.costPerMessage) && newItem.costPerMessage >= 0;
@@ -61,6 +81,8 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
 
         merged[existingIndex] = {
           ...current,
+          name: resolvedName,
+          phone: resolvedPhone,
           currentBudget: budget,
           costPerMessage: cost,
           currentMessages: messages,
@@ -81,6 +103,8 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
 
         merged[existingIndex] = {
           ...current,
+          name: resolvedName,
+          phone: resolvedPhone,
           effectiveness,
           currentMessages: messages,
           currentEffectiveMessages: typeof cantadas === 'number' ? cantadas : Math.round(messages * ((effectiveness || 0) / 100)),
@@ -99,6 +123,8 @@ export function mergeExtractedMetrics(existingItems = [], newItems = [], metricT
 
         merged[existingIndex] = {
           ...current,
+          name: resolvedName,
+          phone: resolvedPhone,
           currentBudget: budget,
           costPerMessage: cost,
           effectiveness,

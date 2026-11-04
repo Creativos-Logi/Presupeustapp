@@ -421,6 +421,29 @@ DRISTRI PRO 1,1400000,750`;
     assert(mergedLatin.cantadas === 70, 'Fusión preserva cantadas (70)');
   }
 
+  // Test 17: Cruce telefónico cuando CSV tiene solo número telefónico y el texto trae nombre y presupuesto
+  {
+    // Supongamos que en CSV vino una tienda identificada únicamente por su teléfono 3003001234
+    const csvStoreWithoutName = [
+      { id: 'csv-1', name: '3003001234', costPerMessage: 650, effectiveness: 14.5, cantadas: 29, currentMessages: 200 }
+    ];
+
+    // Y luego el usuario pega un texto con PEPE 3 y el mismo número telefónico
+    const textRosterItem = [
+      { id: 'roster-1', name: 'PEPE 3', phone: '3003001234', currentBudget: 150000, dailyBudget: 150000, category: 'CAMISETAS' }
+    ];
+
+    const merged = mergeExtractedMetrics(csvStoreWithoutName, textRosterItem, 'COST');
+
+    assert(merged.length === 1, `Exactamente 1 tienda tras fusionar por teléfono (actual: ${merged.length})`);
+    const pepe = merged[0];
+    assert(pepe.name === 'PEPE 3', `Adopta el nombre legible 'PEPE 3' en lugar del número (actual: ${pepe.name})`);
+    assert(pepe.currentBudget === 150000, `Tiene el presupuesto del texto ($150,000, actual: ${pepe.currentBudget})`);
+    assert(pepe.costPerMessage === 650, `Conserva el CPR del CSV ($650, actual: ${pepe.costPerMessage})`);
+    assert(pepe.effectiveness === 14.5, `Conserva la efectividad del CSV (14.5%, actual: ${pepe.effectiveness}%)`);
+    assert(pepe.phone === '3003001234', 'Conserva el teléfono 3003001234');
+  }
+
   console.log(`\nResultados File Parser: ${passed} pasadas, ${failed} fallidas`);
   if (failed > 0) process.exit(1);
 }
