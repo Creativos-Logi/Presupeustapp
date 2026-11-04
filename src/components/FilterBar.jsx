@@ -1,14 +1,17 @@
 import React from 'react';
-import { Search, Filter, X, Tag, User, Briefcase, Sparkles, Check, SlidersHorizontal } from 'lucide-react';
+import { Search, Filter, X, Tag, User, Briefcase, Sparkles, SlidersHorizontal } from 'lucide-react';
 
 export default function FilterBar({
   products = [],
+  productCounts = {},
   selectedProduct = 'ALL',
   onSelectProduct,
   coordinators = [],
+  coordinatorCounts = {},
   selectedCoordinator = 'ALL',
   onSelectCoordinator,
   trafikers = [],
+  trafikerCounts = {},
   selectedTrafiker = 'ALL',
   onSelectTrafiker,
   searchTerm = '',
@@ -16,8 +19,6 @@ export default function FilterBar({
   totalStoresCount = 0,
   filteredStoresCount = 0,
   onResetFilters,
-  filterSimulationMode = false,
-  setFilterSimulationMode,
   filteredBudget = 0
 }) {
   const hasActiveFilters = selectedProduct !== 'ALL' || selectedCoordinator !== 'ALL' || selectedTrafiker !== 'ALL' || searchTerm.trim().length > 0;
@@ -114,11 +115,14 @@ export default function FilterBar({
             }`}
           >
             <option value="ALL">Todos los Productos ({products.length})</option>
-            {products.map(prod => (
-              <option key={prod} value={prod}>
-                {prod}
-              </option>
-            ))}
+            {products.map(prod => {
+              const count = productCounts[prod];
+              return (
+                <option key={prod} value={prod}>
+                  {prod} {count !== undefined ? `(${count})` : ''}
+                </option>
+              );
+            })}
           </select>
         </div>
 
@@ -128,10 +132,10 @@ export default function FilterBar({
             <User className="w-3 h-3 text-sky-400" />
             <span>Trafiker</span>
           </label>
-          <div className="flex bg-slate-950 rounded-xl p-0.5 border border-slate-800">
+          <div className="flex bg-slate-950 rounded-xl p-0.5 border border-slate-800 overflow-x-auto">
             <button
               onClick={() => onSelectTrafiker('ALL')}
-              className={`flex-1 py-1 text-xs font-medium rounded-lg transition ${
+              className={`flex-1 py-1 px-2 text-xs font-medium rounded-lg transition whitespace-nowrap ${
                 selectedTrafiker === 'ALL'
                   ? 'bg-sky-600 text-white shadow-sm'
                   : 'text-slate-400 hover:text-slate-200'
@@ -139,19 +143,22 @@ export default function FilterBar({
             >
               Todos
             </button>
-            {trafikers.map(traf => (
-              <button
-                key={traf}
-                onClick={() => onSelectTrafiker(traf)}
-                className={`flex-1 py-1 text-xs font-medium rounded-lg transition ${
-                  selectedTrafiker === traf
-                    ? 'bg-sky-600 text-white shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {traf}
-              </button>
-            ))}
+            {trafikers.map(traf => {
+              const count = trafikerCounts[traf];
+              return (
+                <button
+                  key={traf}
+                  onClick={() => onSelectTrafiker(traf)}
+                  className={`flex-1 py-1 px-2 text-xs font-medium rounded-lg transition whitespace-nowrap ${
+                    selectedTrafiker === traf
+                      ? 'bg-sky-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {traf} {count !== undefined ? `(${count})` : ''}
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -171,11 +178,14 @@ export default function FilterBar({
             }`}
           >
             <option value="ALL">Todos los Coordinadores ({coordinators.length})</option>
-            {coordinators.map(coord => (
-              <option key={coord} value={coord}>
-                {coord}
-              </option>
-            ))}
+            {coordinators.map(coord => {
+              const count = coordinatorCounts[coord];
+              return (
+                <option key={coord} value={coord}>
+                  {coord} {count !== undefined ? `(${count})` : ''}
+                </option>
+              );
+            })}
           </select>
         </div>
       </div>

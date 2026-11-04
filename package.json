@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "vite build && gh-pages -d dist",
-    "test": "node test/fileParser.test.js && node test/optimizer.test.js"
+    "test": "node test/fileParser.test.js && node test/optimizer.test.js && node test/filterCascading.test.js"
   },
   "dependencies": {
     "clsx": "^2.1.1",

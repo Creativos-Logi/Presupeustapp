@@ -52,18 +52,95 @@ export default function App() {
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
   const [isLoadingFile, setIsLoadingFile] = useState(false);
 
-  // Listas de opciones únicas extraídas de los ítems actuales
+  // Listas de opciones dinámicas en cascada cruzada (Faceted Filtering)
   const availableProducts = useMemo(() => {
-    return Array.from(new Set(items.map(it => it.product || it.category || 'CAMISETAS'))).filter(Boolean).sort();
-  }, [items]);
+    const subset = items.filter(it => {
+      if (selectedCoordinator !== 'ALL' && it.coordinator !== selectedCoordinator) return false;
+      if (selectedTrafiker !== 'ALL' && it.trafiker !== selectedTrafiker) return false;
+      return true;
+    });
+    return Array.from(new Set(subset.map(it => it.product || it.category || 'CAMISETAS'))).filter(Boolean).sort();
+  }, [items, selectedCoordinator, selectedTrafiker]);
 
   const availableCoordinators = useMemo(() => {
-    return Array.from(new Set(items.map(it => it.coordinator || 'GOMEZ'))).filter(Boolean).sort();
-  }, [items]);
+    const subset = items.filter(it => {
+      if (selectedProduct !== 'ALL' && (it.product || it.category) !== selectedProduct) return false;
+      if (selectedTrafiker !== 'ALL' && it.trafiker !== selectedTrafiker) return false;
+      return true;
+    });
+    return Array.from(new Set(subset.map(it => it.coordinator || 'GOMEZ'))).filter(Boolean).sort();
+  }, [items, selectedProduct, selectedTrafiker]);
 
   const availableTrafikers = useMemo(() => {
-    return Array.from(new Set(items.map(it => it.trafiker || 'Oscar'))).filter(Boolean).sort();
-  }, [items]);
+    const subset = items.filter(it => {
+      if (selectedProduct !== 'ALL' && (it.product || it.category) !== selectedProduct) return false;
+      if (selectedCoordinator !== 'ALL' && it.coordinator !== selectedCoordinator) return false;
+      return true;
+    });
+    return Array.from(new Set(subset.map(it => it.trafiker || 'Oscar'))).filter(Boolean).sort();
+  }, [items, selectedProduct, selectedCoordinator]);
+
+  // Conteo de tiendas por opción bajo los filtros complementarios activos
+  const productCounts = useMemo(() => {
+    const counts = {};
+    const subset = items.filter(it => {
+      if (selectedCoordinator !== 'ALL' && it.coordinator !== selectedCoordinator) return false;
+      if (selectedTrafiker !== 'ALL' && it.trafiker !== selectedTrafiker) return false;
+      return true;
+    });
+    subset.forEach(it => {
+      const p = it.product || it.category || 'CAMISETAS';
+      counts[p] = (counts[p] || 0) + 1;
+    });
+    return counts;
+  }, [items, selectedCoordinator, selectedTrafiker]);
+
+  const coordinatorCounts = useMemo(() => {
+    const counts = {};
+    const subset = items.filter(it => {
+      if (selectedProduct !== 'ALL' && (it.product || it.category) !== selectedProduct) return false;
+      if (selectedTrafiker !== 'ALL' && it.trafiker !== selectedTrafiker) return false;
+      return true;
+    });
+    subset.forEach(it => {
+      const c = it.coordinator || 'GOMEZ';
+      counts[c] = (counts[c] || 0) + 1;
+    });
+    return counts;
+  }, [items, selectedProduct, selectedTrafiker]);
+
+  const trafikerCounts = useMemo(() => {
+    const counts = {};
+    const subset = items.filter(it => {
+      if (selectedProduct !== 'ALL' && (it.product || it.category) !== selectedProduct) return false;
+      if (selectedCoordinator !== 'ALL' && it.coordinator !== selectedCoordinator) return false;
+      return true;
+    });
+    subset.forEach(it => {
+      const t = it.trafiker || 'Oscar';
+      counts[t] = (counts[t] || 0) + 1;
+    });
+    return counts;
+  }, [items, selectedProduct, selectedCoordinator]);
+
+  // Auto-limpieza / Reconciliación: si un filtro cruzado deja fuera la opción seleccionada, resetearla a 'ALL'
+  useEffect(() => {
+    if (selectedProduct !== 'ALL' && availableProducts.length > 0 && !availableProducts.includes(selectedProduct)) {
+      setSelectedProduct('ALL');
+    }
+  }, [availableProducts, selectedProduct]);
+
+  useEffect(() => {
+    if (selectedCoordinator !== 'ALL' && availableCoordinators.length > 0 && !availableCoordinators.includes(selectedCoordinator)) {
+      setSelectedCoordinator('ALL');
+    }
+  }, [availableCoordinators, selectedCoordinator]);
+
+  useEffect(() => {
+    if (selectedTrafiker !== 'ALL' && availableTrafikers.length > 0 && !availableTrafikers.includes(selectedTrafiker)) {
+      setSelectedTrafiker('ALL');
+    }
+  }, [availableTrafikers, selectedTrafiker]);
 
   // Indicador de si hay algún filtro activo
   const isFilterActive = useMemo(() => {
@@ -447,12 +524,15 @@ export default function App() {
         {items.length > 0 && (
           <FilterBar
             products={availableProducts}
+            productCounts={productCounts}
             selectedProduct={selectedProduct}
             onSelectProduct={handleSelectProduct}
             coordinators={availableCoordinators}
+            coordinatorCounts={coordinatorCounts}
             selectedCoordinator={selectedCoordinator}
             onSelectCoordinator={handleSelectCoordinator}
             trafikers={availableTrafikers}
+            trafikerCounts={trafikerCounts}
             selectedTrafiker={selectedTrafiker}
             onSelectTrafiker={handleSelectTrafiker}
             searchTerm={searchTerm}
