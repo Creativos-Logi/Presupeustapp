@@ -445,15 +445,19 @@ function allocateBudgetWithConstraints({
       minBound = Math.max(minLineBudget, item.currentBudget * (1 - effectiveLowerFrac));
       
       // La cota superior: se modula con la escala macro para que en recortes fuertes (ej. -30%) ninguna tienda crezca
-      const nonProtectedCurrent = unlockedItems.filter(it => !it.isBelowThreshold).reduce((acc, it) => acc + it.currentBudget, 0);
+      const hasEligibleInPortfolio = items.some(it => !it.isBelowThreshold);
+      const nonProtectedCurrent = items.filter(it => !it.isBelowThreshold).reduce((acc, it) => acc + it.currentBudget, 0);
       let allowedUpperFrac = varFrac;
       if (macroScale < 0.98) {
         // En recortes macro significativos (bajada), limitamos el crecimiento según la escala macro
         allowedUpperFrac = Math.max(0, (1 + varFrac) * macroScale - 1);
-      } else if (totalTargetBudget > totalCurrentBudget && nonProtectedCurrent > 0) {
-        const requiredIncrease = totalTargetBudget - totalCurrentBudget;
-        const requiredFracOnEligible = requiredIncrease / nonProtectedCurrent;
-        allowedUpperFrac = Math.max(varFrac, requiredFracOnEligible);
+      } else if (totalTargetBudget > totalCurrentBudget) {
+        const eligibleBase = hasEligibleInPortfolio ? nonProtectedCurrent : unlockedCurrentBudget;
+        if (eligibleBase > 0) {
+          const requiredIncrease = totalTargetBudget - totalCurrentBudget;
+          const requiredFracOnEligible = requiredIncrease / eligibleBase;
+          allowedUpperFrac = Math.max(varFrac, requiredFracOnEligible);
+        }
       }
       maxBound = item.currentBudget * (1 + allowedUpperFrac);
     } else {
@@ -461,7 +465,9 @@ function allocateBudgetWithConstraints({
       maxBound = freeBudget;
     }
 
-    if (item.isBelowThreshold) {
+    // El Gatekeeper de baja efectividad sólo frena el crecimiento si existen tiendas elegibles en el portafolio
+    const hasEligibleInPortfolio = items.some(it => !it.isBelowThreshold);
+    if (item.isBelowThreshold && hasEligibleInPortfolio) {
       maxBound = Math.min(maxBound, item.currentBudget);
     }
 
@@ -526,7 +532,7 @@ function allocateBudgetWithConstraints({
       .map((it, idx) => ({ idx, irc: it.adjustedIRC, isBelow: it.isBelowThreshold }))
       .sort((a, b) => b.irc - a.irc);
 
-    const hasEligible = sortedIndices.some(x => !unlockedItems[x.idx].isBelowThreshold);
+    const hasEligibleInPortfolio = items.some(it => !it.isBelowThreshold);
     while (remainder >= roundingStep) {
       let anyAllocated = false;
       for (let s = 0; s < sortedIndices.length; s++) {
@@ -534,7 +540,7 @@ function allocateBudgetWithConstraints({
         const targetIdx = sortedIndices[s].idx;
         const candidate = unlockedAllocations[targetIdx] + roundingStep;
         if (candidate <= bounds[targetIdx].maxBound) {
-          if (!unlockedItems[targetIdx].isBelowThreshold || !hasEligible) {
+          if (!unlockedItems[targetIdx].isBelowThreshold || !hasEligibleInPortfolio) {
             unlockedAllocations[targetIdx] = candidate;
             remainder -= roundingStep;
             anyAllocated = true;
